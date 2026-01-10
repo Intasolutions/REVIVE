@@ -11,6 +11,7 @@ import Reports from './pages/Reports';
 import Users from './pages/Users';
 import Laboratory from './pages/Laboratory';
 import { SearchProvider } from './context/SearchContext';
+import { ToastProvider } from './context/ToastContext';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -21,6 +22,7 @@ const ProtectedRoute = ({ children }) => {
 
 function App() {
   return (
+    <ToastProvider>
     <AuthProvider>
       <SearchProvider>
         <BrowserRouter>
@@ -40,6 +42,7 @@ function App() {
         </BrowserRouter>
       </SearchProvider>
     </AuthProvider>
+    </ToastProvider>
   );
 }
 

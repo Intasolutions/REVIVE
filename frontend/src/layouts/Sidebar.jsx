@@ -1,10 +1,17 @@
-import React from 'react';
-import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Users, Stethoscope, Pill, FlaskConical, Receipt, BarChart3, Settings, LogOut, Heart } from 'lucide-react';
+import React, { useState } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
+import { motion, AnimatePresence } from 'framer-motion';
+import {
+    LayoutDashboard, Users, Stethoscope, Pill,
+    FlaskConical, Receipt, BarChart3, Settings,
+    LogOut, Heart, ChevronRight
+} from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
 const Sidebar = () => {
     const { user, logout } = useAuth();
+    const location = useLocation();
+    const [isHovered, setIsHovered] = useState(false);
 
     const menuItems = [
         { name: 'Dashboard', icon: LayoutDashboard, path: '/', roles: ['ADMIN', 'DOCTOR', 'RECEPTION', 'PHARMACY', 'LAB'] },
@@ -14,54 +21,135 @@ const Sidebar = () => {
         { name: 'Laboratory', icon: FlaskConical, path: '/lab', roles: ['ADMIN', 'LAB'] },
         { name: 'Billing', icon: Receipt, path: '/billing', roles: ['ADMIN', 'RECEPTION'] },
         { name: 'Reports', icon: BarChart3, path: '/reports', roles: ['ADMIN'] },
-        { name: 'Settings', icon: Settings, path: '/users', roles: ['ADMIN'] },
+        { name: 'Users', icon: Settings, path: '/users', roles: ['ADMIN'] },
     ].filter(item => item.roles.includes(user?.role));
 
     return (
-        <aside className="w-60 h-screen bg-white border-r border-gray-100 flex flex-col sticky top-0">
-            {/* Logo */}
-            <div className="h-16 px-6 flex items-center gap-3 border-b border-gray-100">
-                <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg flex items-center justify-center shadow-sm">
-                    <Heart className="w-4 h-4 text-white" />
+        <motion.aside
+            onMouseEnter={() => setIsHovered(true)}
+            onMouseLeave={() => setIsHovered(false)}
+            initial={false}
+            animate={{ width: isHovered ? 280 : 80 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+            className="h-screen bg-white border-r border-slate-100 flex flex-col sticky top-0 z-50 overflow-hidden shadow-2xl shadow-slate-200/50"
+        >
+            {/* --- Branding Section --- */}
+            <div className="h-20 flex items-center px-6 gap-4 overflow-hidden border-b border-slate-50">
+                <div className="flex-shrink-0 relative">
+                    <div className="w-10 h-10 bg-slate-950 rounded-xl flex items-center justify-center shadow-lg shadow-blue-500/10">
+                        <Heart className="w-5 h-5 text-blue-500" fill="currentColor" />
+                    </div>
                 </div>
-                <span className="text-gray-900 font-semibold text-lg">Revive</span>
+                <AnimatePresence>
+                    {isHovered && (
+                        <motion.div
+                            initial={{ opacity: 0, x: -10 }}
+                            animate={{ opacity: 1, x: 0 }}
+                            exit={{ opacity: 0, x: -10 }}
+                            className="flex flex-col whitespace-nowrap"
+                        >
+                            <span className="text-slate-950 font-bold text-xl tracking-tight">Revive</span>
+                            <span className="text-slate-400 text-[10px] uppercase tracking-widest font-bold">Health Systems</span>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
             </div>
 
-            {/* Navigation */}
-            <nav className="flex-1 py-6 px-4 space-y-1">
-                {menuItems.map((item) => (
-                    <NavLink
-                        key={item.name}
-                        to={item.path}
-                        className={({ isActive }) => `
-                            flex items-center gap-3 px-3 py-2.5 rounded-lg text-[13px] font-medium transition-all
-                            ${isActive
-                                ? 'bg-blue-50 text-blue-600'
-                                : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'}
-                        `}
-                    >
-                        <item.icon size={18} strokeWidth={1.8} />
-                        <span>{item.name}</span>
-                    </NavLink>
-                ))}
+            {/* --- Navigation Section --- */}
+            <nav className="flex-1 px-3 py-6 space-y-2 overflow-y-auto overflow-x-hidden custom-scrollbar">
+                {menuItems.map((item) => {
+                    const isActive = location.pathname === item.path;
+
+                    return (
+                        <NavLink
+                            key={item.name}
+                            to={item.path}
+                            className="relative flex items-center group"
+                        >
+                            <div className={`
+                                flex items-center w-full px-4 py-3.5 rounded-2xl transition-all duration-300
+                                ${isActive
+                                    ? 'bg-slate-950 text-white shadow-lg shadow-slate-900/20'
+                                    : 'text-slate-500 hover:bg-slate-50 hover:text-slate-900'}
+                            `}>
+                                <div className="flex-shrink-0">
+                                    <item.icon size={22} strokeWidth={isActive ? 2 : 1.5} />
+                                </div>
+
+                                <AnimatePresence>
+                                    {isHovered && (
+                                        <motion.span
+                                            initial={{ opacity: 0, x: -10 }}
+                                            animate={{ opacity: 1, x: 0 }}
+                                            exit={{ opacity: 0, x: -10 }}
+                                            className="ml-4 text-sm font-semibold whitespace-nowrap"
+                                        >
+                                            {item.name}
+                                        </motion.span>
+                                    )}
+                                </AnimatePresence>
+
+                                {isActive && isHovered && (
+                                    <motion.div
+                                        initial={{ opacity: 0 }}
+                                        animate={{ opacity: 1 }}
+                                        className="ml-auto"
+                                    >
+                                        <ChevronRight size={16} className="text-blue-400" />
+                                    </motion.div>
+                                )}
+                            </div>
+                        </NavLink>
+                    );
+                })}
             </nav>
 
-            {/* User */}
-            <div className="p-4 border-t border-gray-100">
-                <div className="flex items-center gap-3 px-2 py-2">
-                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-gray-100 to-gray-200 flex items-center justify-center text-gray-600 text-sm font-medium">
-                        {user?.username?.[0]?.toUpperCase()}
+            {/* --- Bottom User Profile Section --- */}
+            <div className="p-4 border-t border-slate-50">
+                <div className={`
+                    flex items-center gap-3 p-2 rounded-[20px] transition-colors
+                    ${isHovered ? 'bg-slate-50 border border-slate-100' : ''}
+                `}>
+                    <div className="flex-shrink-0 relative">
+                        <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 flex items-center justify-center shadow-sm overflow-hidden">
+                            <span className="text-slate-900 font-bold text-sm">
+                                {user?.username?.[0]?.toUpperCase()}
+                            </span>
+                        </div>
+                        <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></div>
                     </div>
-                    <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-900 truncate">{user?.username}</p>
-                        <p className="text-xs text-gray-400">{user?.role}</p>
-                    </div>
-                    <button onClick={logout} className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-lg transition-colors">
-                        <LogOut size={16} />
-                    </button>
+
+                    <AnimatePresence>
+                        {isHovered && (
+                            <motion.div
+                                initial={{ opacity: 0, x: -10 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                exit={{ opacity: 0, x: -10 }}
+                                className="flex-1 min-w-0"
+                            >
+                                <p className="text-xs font-bold text-slate-900 truncate">{user?.username || 'Admin User'}</p>
+                                <p className="text-[10px] font-medium text-blue-600 uppercase tracking-tighter">
+                                    {user?.role}
+                                </p>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
                 </div>
+
+                <button
+                    onClick={logout}
+                    className={`
+                        mt-2 w-full flex items-center justify-center gap-2 py-3 rounded-xl transition-all duration-200
+                        ${isHovered
+                            ? 'text-slate-600 hover:text-red-600 hover:bg-red-50'
+                            : 'text-slate-400 hover:text-red-600 hover:bg-red-50'}
+                    `}
+                >
+                    <LogOut size={18} />
+                    {isHovered && <span className="text-xs font-bold">Sign Out</span>}
+                </button>
             </div>
-        </aside>
+        </motion.aside>
     );
 };
 

@@ -1,20 +1,72 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Plus, Search, UserPlus, Phone, User as UserIcon, Calendar, ArrowRight, X, Activity } from 'lucide-react';
-import { Card, Button, Input, Table } from '../components/UI';
+import { 
+    UserPlus, Phone, User as UserIcon, ArrowRight, X, 
+    Activity, Thermometer, Heart, Scale, Stethoscope, 
+    MapPin, ChevronRight, Search, CheckCircle2, AlertCircle
+} from 'lucide-react';
 import { useSearch } from '../context/SearchContext';
-import Pagination from '../components/Pagination';
+import Pagination from '../components/Pagination'; 
 import api from '../api/axios';
 
+// --- Sub-Component: Skeleton Loader (Premium Loading State) ---
+const TableSkeleton = () => (
+    <div className="animate-pulse space-y-4 p-6">
+        {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="flex items-center space-x-4">
+                <div className="h-12 w-12 rounded-xl bg-slate-200" />
+                <div className="space-y-2 flex-1">
+                    <div className="h-4 w-1/4 rounded bg-slate-200" />
+                    <div className="h-3 w-1/3 rounded bg-slate-100" />
+                </div>
+                <div className="h-8 w-24 rounded-lg bg-slate-100" />
+            </div>
+        ))}
+    </div>
+);
+
+// --- Sub-Component: Toast Notification (Replaces Alert) ---
+const Toast = ({ message, type, onClose }) => (
+    <motion.div 
+        initial={{ opacity: 0, y: 50, scale: 0.9 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 20, scale: 0.9 }}
+        className={`fixed bottom-6 right-6 flex items-center gap-3 px-6 py-4 rounded-2xl shadow-2xl z-[60] border ${
+            type === 'success' ? 'bg-white border-green-100' : 'bg-white border-red-100'
+        }`}
+    >
+        <div className={`p-2 rounded-full ${type === 'success' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
+            {type === 'success' ? <CheckCircle2 size={20} /> : <AlertCircle size={20} />}
+        </div>
+        <div>
+            <h4 className={`text-sm font-bold ${type === 'success' ? 'text-green-900' : 'text-red-900'}`}>
+                {type === 'success' ? 'Success' : 'Error'}
+            </h4>
+            <p className="text-xs text-slate-500 font-medium">{message}</p>
+        </div>
+        <button onClick={onClose} className="ml-4 text-slate-400 hover:text-slate-600">
+            <X size={16} />
+        </button>
+    </motion.div>
+);
+
 const Reception = () => {
+    // --- State Management ---
     const [patientsData, setPatientsData] = useState({ results: [], count: 0 });
-    const { globalSearch, setGlobalSearch } = useSearch();
+    const { globalSearch } = useSearch();
     const [loading, setLoading] = useState(true);
     const [page, setPage] = useState(1);
+    
+    // Modals
     const [showAddModal, setShowAddModal] = useState(false);
     const [showVisitModal, setShowVisitModal] = useState(false);
+    
+    // Data Selection
     const [selectedPatient, setSelectedPatient] = useState(null);
     const [doctors, setDoctors] = useState([]);
+
+    // Feedback State
+    const [notification, setNotification] = useState(null); // { type: 'success'|'error', message: '' }
 
     // Registration Form
     const [form, setForm] = useState({ full_name: '', age: '', gender: 'M', phone: '', address: '' });
@@ -25,20 +77,29 @@ const Reception = () => {
         vitals: { temp: '', bp: '', pulse: '', weight: '' }
     });
 
+    // --- Helper: Show Notification ---
+    const showToast = (type, message) => {
+        setNotification({ type, message });
+        setTimeout(() => setNotification(null), 4000); // Auto hide after 4s
+    };
+
+    // --- Effects ---
     useEffect(() => {
         fetchPatients();
     }, [page, globalSearch]);
 
+    // --- API Functions ---
     const fetchPatients = async () => {
         setLoading(true);
         try {
             const { data } = await api.get(`/reception/patients/?page=${page}${globalSearch ? `&search=${encodeURIComponent(globalSearch)}` : ''}`);
-            // DRF paginated response returns { count, next, previous, results }
             setPatientsData(data);
         } catch (err) {
             console.error(err);
+            showToast('error', 'Failed to load patients list.');
         } finally {
-            setLoading(false);
+            // Artificial delay to show off the skeleton loader (Optional: remove in production)
+            setTimeout(() => setLoading(false), 500); 
         }
     };
 
@@ -48,6 +109,7 @@ const Reception = () => {
             setDoctors(data);
         } catch (err) {
             console.error(err);
+            showToast('error', 'Could not fetch doctors list.');
         }
     };
 
@@ -56,11 +118,12 @@ const Reception = () => {
         try {
             await api.post('/reception/patients/register/', form);
             setShowAddModal(false);
-            setPage(1); // Reset to first page
+            setPage(1);
             fetchPatients();
             setForm({ full_name: '', age: '', gender: 'M', phone: '', address: '' });
+            showToast('success', 'New patient registered successfully!');
         } catch (err) {
-            alert("Registration failed. Please check phone number uniquely.");
+            showToast('error', 'Registration failed. Check phone number.');
         }
     };
 
@@ -81,242 +144,430 @@ const Reception = () => {
             });
             setShowVisitModal(false);
             setVisitForm({ doctor: '', vitals: { temp: '', bp: '', pulse: '', weight: '' } });
-            alert("Visit created successfully! Patient sent to Doctor Queue.");
+            showToast('success', `Visit token generated for ${selectedPatient.full_name}`);
         } catch (err) {
-            alert("Failed to create visit.");
+            showToast('error', 'Failed to create visit record.');
         }
     };
 
     const totalPages = Math.ceil((patientsData.count || 0) / 10);
 
     return (
-        <div className="p-6 space-y-6 bg-gray-50 min-h-screen">
-            <div className="flex justify-between items-center">
+        <div className="p-6 md:p-8 min-h-screen bg-[#F8FAFC] font-sans text-slate-900 relative">
+            
+            {/* --- Toast Notification Container --- */}
+            <AnimatePresence>
+                {notification && (
+                    <Toast 
+                        message={notification.message} 
+                        type={notification.type} 
+                        onClose={() => setNotification(null)} 
+                    />
+                )}
+            </AnimatePresence>
+
+            {/* --- Header Section --- */}
+            <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8">
                 <div>
-                    <h1 className="text-2xl font-semibold text-gray-900">Reception</h1>
-                    <p className="text-gray-500 text-sm mt-1">Manage patient registrations and visit queues.</p>
+                    <h1 className="text-3xl font-bold tracking-tight text-slate-950">Reception</h1>
+                    <div className="flex items-center gap-2 text-slate-500 font-medium mt-1">
+                        <span>Patient Management</span>
+                        <div className="w-1 h-1 rounded-full bg-slate-300" />
+                        <span>Today: {new Date().toLocaleDateString()}</span>
+                    </div>
                 </div>
-                <button onClick={() => setShowAddModal(true)} className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700">
-                    <UserPlus size={16} />
-                    Register Patient
+                <button 
+                    onClick={() => setShowAddModal(true)} 
+                    className="group flex items-center gap-3 px-6 py-3.5 bg-slate-950 text-white rounded-2xl font-bold shadow-xl shadow-slate-900/20 hover:bg-blue-600 hover:shadow-blue-600/20 transition-all active:scale-[0.98]"
+                >
+                    <div className="p-1 rounded-lg bg-white/20 group-hover:bg-white/30 transition-colors">
+                        <UserPlus size={18} />
+                    </div>
+                    <span>Register New Patient</span>
                 </button>
             </div>
 
-            <div className="bg-white rounded-xl border border-gray-100 overflow-hidden">
-
-                <div className="overflow-x-auto">
-                    <Table headers={['Patient Name', 'Age/Gender', 'Phone', 'Address', 'Actions']}>
-                        {loading ? (
-                            <tr><td colSpan="5" className="text-center py-16">
-                                <Activity className="mx-auto text-blue-500 animate-spin mb-2" size={24} />
-                                <span className="text-gray-400 text-sm">Loading patients...</span>
-                            </td></tr>
-                        ) : patientsData.results && patientsData.results.length === 0 ? (
-                            <tr><td colSpan="5" className="text-center py-16 text-gray-400">No patients found.</td></tr>
-                        ) : patientsData.results && patientsData.results.map(p => (
-                            <tr key={p.p_id} className="hover:bg-gray-50 transition-colors border-b border-gray-50 last:border-0">
-                                <td className="px-6 py-4">
-                                    <div className="flex items-center gap-3">
-                                        <div className="w-9 h-9 rounded-lg bg-blue-50 flex items-center justify-center text-blue-600">
-                                            <UserIcon size={16} />
-                                        </div>
-                                        <div>
-                                            <p className="font-medium text-gray-900">{p.full_name}</p>
-                                            <p className="text-xs text-gray-400">#{p.p_id.slice(0, 8)}</p>
-                                        </div>
-                                    </div>
-                                </td>
-                                <td className="px-6 py-4">
-                                    <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded text-xs font-medium">
-                                        {p.age}Y / {p.gender}
-                                    </span>
-                                </td>
-                                <td className="px-6 py-4">
-                                    <span className="text-sm text-gray-600">{p.phone}</span>
-                                </td>
-                                <td className="px-6 py-4">
-                                    <p className="text-sm text-gray-500 max-w-[200px] truncate">{p.address}</p>
-                                </td>
-                                <td className="px-6 py-4 text-right">
-                                    <button
-                                        onClick={() => handleNewVisit(p)}
-                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50 hover:border-blue-300 hover:text-blue-600 transition-colors"
-                                    >
-                                        New Visit
-                                        <ArrowRight size={12} />
-                                    </button>
-                                </td>
-                            </tr>
-                        ))}
-                    </Table>
-                </div>
-
-                <Pagination
-                    current={page}
-                    total={totalPages}
-                    onPageChange={setPage}
-                    loading={loading}
-                />
+            {/* --- Main Data Card --- */}
+            <div className="bg-white rounded-[32px] border border-slate-100 shadow-sm overflow-hidden">
+                {loading ? (
+                    <TableSkeleton />
+                ) : (
+                    <>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-left border-collapse">
+                                <thead>
+                                    <tr className="border-b border-slate-100 bg-slate-50/50 text-[11px] uppercase tracking-widest font-bold text-slate-400">
+                                        <th className="px-8 py-6">Patient Identity</th>
+                                        <th className="px-6 py-6">Vitals</th>
+                                        <th className="px-6 py-6">Contact Info</th>
+                                        <th className="px-6 py-6 text-right">Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-50">
+                                    {patientsData.results && patientsData.results.length === 0 ? (
+                                        <tr>
+                                            <td colSpan="4" className="py-24 text-center">
+                                                <div className="flex flex-col items-center justify-center opacity-50">
+                                                    <div className="p-4 bg-slate-50 rounded-full mb-3">
+                                                        <Search size={32} className="text-slate-400" />
+                                                    </div>
+                                                    <p className="font-bold text-slate-900">No patients found</p>
+                                                    <p className="text-sm text-slate-500">Try adjusting your search filters</p>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    ) : (
+                                        patientsData.results.map((p) => (
+                                            <tr key={p.p_id} className="group hover:bg-blue-50/30 transition-colors">
+                                                <td className="px-8 py-5">
+                                                    <div className="flex items-center gap-4">
+                                                        <div className="relative">
+                                                            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white font-bold text-lg shadow-lg shadow-blue-500/20">
+                                                                {p.full_name.charAt(0)}
+                                                            </div>
+                                                            <div className="absolute -bottom-1 -right-1 bg-white p-0.5 rounded-full">
+                                                                <div className="w-3 h-3 bg-emerald-500 rounded-full border-2 border-white" />
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <p className="font-bold text-slate-900 text-[15px]">{p.full_name}</p>
+                                                            <p className="text-xs font-bold text-slate-400 font-mono tracking-wide">ID: {p.p_id.slice(0, 8)}</p>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-5">
+                                                    <div className="flex items-center gap-2">
+                                                        <span className={`px-3 py-1 rounded-lg text-xs font-bold border ${p.gender === 'M' ? 'bg-blue-50 text-blue-600 border-blue-100' : 'bg-rose-50 text-rose-600 border-rose-100'}`}>
+                                                            {p.gender === 'M' ? 'Male' : 'Female'}
+                                                        </span>
+                                                        <span className="text-sm font-semibold text-slate-600">{p.age} Yrs</span>
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-5">
+                                                    <div className="space-y-1">
+                                                        <div className="flex items-center gap-2 text-sm font-semibold text-slate-700">
+                                                            <Phone size={14} className="text-slate-400" />
+                                                            {p.phone}
+                                                        </div>
+                                                        <div className="flex items-center gap-2 text-xs text-slate-400 truncate max-w-[200px]">
+                                                            <MapPin size={12} />
+                                                            {p.address}
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-5 text-right">
+                                                    <button 
+                                                        onClick={() => handleNewVisit(p)}
+                                                        className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-600 text-xs font-bold hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all shadow-sm active:scale-95"
+                                                    >
+                                                        Triage
+                                                        <ChevronRight size={14} />
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                        <div className="p-6 border-t border-slate-100 bg-slate-50/50">
+                            <Pagination 
+                                current={page} 
+                                total={totalPages} 
+                                onPageChange={setPage} 
+                                loading={loading} 
+                            />
+                        </div>
+                    </>
+                )}
             </div>
 
-
-            {/* Register Modal */}
+            {/* --- MODAL: Patient Registration --- */}
+           {/* --- PREMIUM MODAL: Patient Registration --- */}
             <AnimatePresence>
                 {showAddModal && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-950/40 backdrop-blur-sm">
-                        <motion.div
-                            initial={{ scale: 0.9, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            exit={{ scale: 0.9, opacity: 0 }}
-                            className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl overflow-hidden"
+                    <div className="fixed inset-0 z-[100] flex items-center justify-center px-4">
+                        {/* 1. Glassmorphism Backdrop */}
+                        <motion.div 
+                            initial={{ opacity: 0 }} 
+                            animate={{ opacity: 1 }} 
+                            exit={{ opacity: 0 }}
+                            className="absolute inset-0 bg-slate-950/60 backdrop-blur-md transition-all" 
+                            onClick={() => setShowAddModal(false)}
+                        />
+                        
+                        {/* 2. The Card */}
+                        <motion.div 
+                            initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                            transition={{ type: "spring", duration: 0.5 }}
+                            className="relative bg-white w-full max-w-2xl rounded-[40px] shadow-2xl overflow-hidden ring-1 ring-white/20"
                         >
-                            <div className="p-10 border-b border-slate-100 bg-slate-50/50">
-                                <h2 className="text-2xl font-black text-slate-900 font-outfit">Patient Registration</h2>
-                                <p className="text-sm text-slate-500 mt-2 font-inter font-medium tracking-tight whitespace-nowrap overflow-hidden text-ellipsis">Fill in the details below to create a new patient profile.</p>
+                            {/* Header */}
+                            <div className="px-10 py-8 border-b border-slate-100 flex justify-between items-start bg-slate-50/30">
+                                <div>
+                                    <div className="flex items-center gap-3 mb-2">
+                                        <div className="p-2.5 bg-blue-600 rounded-xl shadow-lg shadow-blue-600/20">
+                                            <UserPlus className="text-white" size={20} />
+                                        </div>
+                                        <h2 className="text-2xl font-bold text-slate-900 tracking-tight">New Patient</h2>
+                                    </div>
+                                    <p className="text-sm text-slate-500 font-medium ml-1">Create a digital health record.</p>
+                                </div>
+                                <button 
+                                    onClick={() => setShowAddModal(false)} 
+                                    className="p-2.5 rounded-full bg-slate-50 hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
+                                >
+                                    <X size={20} />
+                                </button>
                             </div>
-                            <form onSubmit={handleRegister} className="p-10 space-y-6">
-                                <Input
-                                    label="Full Name *"
-                                    placeholder="e.g. John Doe"
-                                    value={form.full_name}
-                                    onChange={e => setForm({ ...form, full_name: e.target.value })}
-                                    required
-                                    className="rounded-2xl border-2 border-slate-100 focus:border-sky-500/20"
-                                />
-                                <div className="flex gap-6">
-                                    <Input
-                                        label="Age *"
-                                        type="number"
-                                        value={form.age}
-                                        onChange={e => setForm({ ...form, age: e.target.value })}
-                                        required
-                                        className="rounded-2xl border-2 border-slate-100"
-                                    />
-                                    <div className="w-full space-y-2">
-                                        <label className="text-xs font-black text-slate-700 ml-1 uppercase tracking-wider">Gender *</label>
-                                        <select
-                                            className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-100 rounded-2xl outline-none focus:ring-4 focus:ring-sky-500/10 focus:border-sky-500/20 transition-all font-inter font-medium text-slate-700"
-                                            value={form.gender}
-                                            onChange={e => setForm({ ...form, gender: e.target.value })}
-                                        >
-                                            <option value="M">Male</option>
-                                            <option value="F">Female</option>
-                                            <option value="O">Other</option>
-                                        </select>
+                            
+                            {/* Form */}
+                            <form onSubmit={handleRegister} className="p-10">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                    
+                                    {/* Full Name (Span 2 cols) */}
+                                    <div className="md:col-span-2 space-y-2">
+                                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Full Legal Name</label>
+                                        <div className="relative group">
+                                            <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-600 transition-colors" size={18} />
+                                            <input 
+                                                type="text" 
+                                                className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-900 outline-none focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all placeholder:font-medium placeholder:text-slate-400"
+                                                value={form.full_name}
+                                                onChange={e => setForm({...form, full_name: e.target.value})}
+                                                placeholder="e.g. Rahul Verma"
+                                                required
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Age */}
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Age</label>
+                                        <div className="relative group">
+                                            <Activity className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-600 transition-colors" size={18} />
+                                            <input 
+                                                type="number" 
+                                                className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-900 outline-none focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all"
+                                                value={form.age}
+                                                onChange={e => setForm({...form, age: e.target.value})}
+                                                placeholder="Years"
+                                                required
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Gender (Segmented Control - Premium UX) */}
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Gender</label>
+                                        <div className="flex bg-slate-100 p-1.5 rounded-2xl">
+                                            {['M', 'F', 'O'].map((option) => (
+                                                <button
+                                                    key={option}
+                                                    type="button"
+                                                    onClick={() => setForm({...form, gender: option})}
+                                                    className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all duration-200 ${
+                                                        form.gender === option 
+                                                        ? 'bg-white text-blue-600 shadow-sm shadow-slate-200' 
+                                                        : 'text-slate-400 hover:text-slate-600'
+                                                    }`}
+                                                >
+                                                    {option === 'M' ? 'Male' : option === 'F' ? 'Female' : 'Other'}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* Phone */}
+                                    <div className="md:col-span-2 space-y-2">
+                                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Phone Number</label>
+                                        <div className="relative group">
+                                            <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-600 transition-colors" size={18} />
+                                            <input 
+                                                type="tel" 
+                                                className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-900 outline-none focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all placeholder:font-medium placeholder:text-slate-400"
+                                                value={form.phone}
+                                                onChange={e => setForm({...form, phone: e.target.value})}
+                                                placeholder="10-digit mobile number"
+                                                required
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Address */}
+                                    <div className="md:col-span-2 space-y-2">
+                                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Residential Address</label>
+                                        <div className="relative group">
+                                            <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-600 transition-colors" size={18} />
+                                            <input 
+                                                type="text" 
+                                                className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-900 outline-none focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all placeholder:font-medium placeholder:text-slate-400"
+                                                value={form.address}
+                                                onChange={e => setForm({...form, address: e.target.value})}
+                                                placeholder="Area, Street, City"
+                                            />
+                                        </div>
                                     </div>
                                 </div>
-                                <Input
-                                    label="Phone Number *"
-                                    placeholder="10 digits"
-                                    value={form.phone}
-                                    onChange={e => setForm({ ...form, phone: e.target.value })}
-                                    required
-                                    className="rounded-2xl border-2 border-slate-100"
-                                />
-                                <Input
-                                    label="Address"
-                                    placeholder="Full residence address"
-                                    value={form.address}
-                                    onChange={e => setForm({ ...form, address: e.target.value })}
-                                    className="rounded-2xl border-2 border-slate-100"
-                                />
-                                <div className="flex gap-4 pt-4">
-                                    <Button variant="secondary" className="flex-1 h-14 rounded-2xl font-bold" onClick={() => setShowAddModal(false)}>Cancel</Button>
-                                    <Button type="submit" className="flex-1 h-14 rounded-2xl font-bold shadow-xl shadow-sky-500/20">Save Patient</Button>
-                                </div>
+
+                                <button 
+                                    type="submit" 
+                                    className="mt-8 w-full py-4 bg-slate-950 hover:bg-blue-600 text-white font-bold rounded-2xl shadow-xl shadow-slate-900/10 hover:shadow-blue-600/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
+                                >
+                                    <span>Complete Registration</span>
+                                    <ArrowRight size={18} />
+                                </button>
                             </form>
                         </motion.div>
                     </div>
                 )}
             </AnimatePresence>
 
-            {/* Visit Modal */}
+            {/* --- MODAL: Create Visit --- */}
             <AnimatePresence>
                 {showVisitModal && selectedPatient && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-950/40 backdrop-blur-sm">
-                        <motion.div
-                            initial={{ scale: 0.9, opacity: 0 }}
-                            animate={{ scale: 1, opacity: 1 }}
-                            exit={{ scale: 0.9, opacity: 0 }}
-                            className="bg-white w-full max-w-xl rounded-[2.5rem] shadow-2xl overflow-hidden"
+                    <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+                        <motion.div 
+                            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                            className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" 
+                            onClick={() => setShowVisitModal(false)}
+                        />
+                        <motion.div 
+                            initial={{ opacity: 0, scale: 0.95, y: 20 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.95, y: 20 }}
+                            className="relative bg-white w-full max-w-4xl rounded-[32px] shadow-2xl overflow-hidden flex flex-col md:flex-row"
                         >
-                            <div className="p-10 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-                                <div>
-                                    <h2 className="text-2xl font-black text-slate-900 font-outfit leading-tight">Create New Visit</h2>
-                                    <p className="text-sm text-slate-500 mt-2 font-inter font-medium tracking-tight">Assign {selectedPatient.full_name} to a doctor.</p>
-                                </div>
-                                <div
-                                    className="w-10 h-10 rounded-full bg-white flex items-center justify-center cursor-pointer shadow-sm text-slate-400 hover:text-rose-500 transition-all border border-slate-100"
-                                    onClick={() => setShowVisitModal(false)}
-                                >
-                                    <X size={20} />
+                            {/* Left: Vitals */}
+                            <div className="md:w-1/2 p-8 border-r border-slate-100 bg-slate-50/50">
+                                <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2 mb-6">
+                                    <Activity className="text-blue-600" size={20} />
+                                    Initial Triage
+                                </h3>
+                                <div className="grid grid-cols-2 gap-4">
+                                    {/* Temp */}
+                                    <div className="bg-white p-4 rounded-2xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-500/10 transition-all">
+                                        <div className="flex justify-between mb-2">
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase">Temp</label>
+                                            <Thermometer size={16} className="text-rose-400" />
+                                        </div>
+                                        <div className="flex items-baseline gap-1">
+                                            <input 
+                                                type="text" placeholder="98.6"
+                                                className="w-full text-2xl font-bold text-slate-900 outline-none placeholder:text-slate-200"
+                                                value={visitForm.vitals.temp}
+                                                onChange={e => setVisitForm({...visitForm, vitals: {...visitForm.vitals, temp: e.target.value}})}
+                                            />
+                                            <span className="text-xs font-bold text-slate-400">°F</span>
+                                        </div>
+                                    </div>
+                                    {/* BP */}
+                                    <div className="bg-white p-4 rounded-2xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-500/10 transition-all">
+                                        <div className="flex justify-between mb-2">
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase">BP</label>
+                                            <Heart size={16} className="text-red-500" />
+                                        </div>
+                                        <div className="flex items-baseline gap-1">
+                                            <input 
+                                                type="text" placeholder="120/80"
+                                                className="w-full text-2xl font-bold text-slate-900 outline-none placeholder:text-slate-200"
+                                                value={visitForm.vitals.bp}
+                                                onChange={e => setVisitForm({...visitForm, vitals: {...visitForm.vitals, bp: e.target.value}})}
+                                            />
+                                            <span className="text-xs font-bold text-slate-400">mm</span>
+                                        </div>
+                                    </div>
+                                    {/* Pulse */}
+                                    <div className="bg-white p-4 rounded-2xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-500/10 transition-all">
+                                        <div className="flex justify-between mb-2">
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase">Pulse</label>
+                                            <Activity size={16} className="text-emerald-500" />
+                                        </div>
+                                        <div className="flex items-baseline gap-1">
+                                            <input 
+                                                type="text" placeholder="72"
+                                                className="w-full text-2xl font-bold text-slate-900 outline-none placeholder:text-slate-200"
+                                                value={visitForm.vitals.pulse}
+                                                onChange={e => setVisitForm({...visitForm, vitals: {...visitForm.vitals, pulse: e.target.value}})}
+                                            />
+                                            <span className="text-xs font-bold text-slate-400">bpm</span>
+                                        </div>
+                                    </div>
+                                    {/* Weight */}
+                                    <div className="bg-white p-4 rounded-2xl border-2 border-slate-100 shadow-sm focus-within:border-blue-500 focus-within:ring-4 focus-within:ring-blue-500/10 transition-all">
+                                        <div className="flex justify-between mb-2">
+                                            <label className="text-[10px] font-bold text-slate-400 uppercase">Weight</label>
+                                            <Scale size={16} className="text-blue-500" />
+                                        </div>
+                                        <div className="flex items-baseline gap-1">
+                                            <input 
+                                                type="text" placeholder="70"
+                                                className="w-full text-2xl font-bold text-slate-900 outline-none placeholder:text-slate-200"
+                                                value={visitForm.vitals.weight}
+                                                onChange={e => setVisitForm({...visitForm, vitals: {...visitForm.vitals, weight: e.target.value}})}
+                                            />
+                                            <span className="text-xs font-bold text-slate-400">kg</span>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
 
-                            <form onSubmit={submitVisit} className="p-10 space-y-8">
-                                <div className="space-y-4">
-                                    <label className="text-xs font-black text-slate-700 ml-1 uppercase tracking-wider">Select Doctor *</label>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        {doctors.map(doc => (
-                                            <div
-                                                key={doc.u_id}
-                                                onClick={() => setVisitForm({ ...visitForm, doctor: doc.u_id })}
-                                                className={`p-5 border-2 rounded-3xl cursor-pointer transition-all flex items-center gap-4 ${visitForm.doctor === doc.u_id ? 'border-sky-500 bg-sky-50 shadow-lg shadow-sky-500/10 scale-[1.02]' : 'border-slate-100 hover:border-slate-200 bg-slate-50/50'}`}
-                                            >
-                                                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-sm ${visitForm.doctor === doc.u_id ? 'bg-sky-500 text-white shadow-sky-500/30' : 'bg-white text-slate-400'}`}>
-                                                    <UserIcon size={20} />
-                                                </div>
-                                                <div className="flex-1 overflow-hidden">
-                                                    <p className={`font-bold text-sm truncate ${visitForm.doctor === doc.u_id ? 'text-sky-900' : 'text-slate-700'}`}>Dr. {doc.username}</p>
-                                                    <div className="flex items-center gap-1.5 mt-0.5">
-                                                        <div className="w-1.5 h-1.5 rounded-full bg-emerald-400"></div>
-                                                        <p className="text-[10px] text-slate-400 uppercase font-black tracking-widest leading-none truncate">Available</p>
-                                                    </div>
-                                                </div>
+                            {/* Right: Doctor Selection */}
+                            <div className="md:w-1/2 p-8 flex flex-col">
+                                <div className="flex justify-between items-center mb-6">
+                                    <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+                                        <Stethoscope className="text-slate-900" size={20} />
+                                        Assign Doctor
+                                    </h3>
+                                    <button onClick={() => setShowVisitModal(false)} className="p-1 rounded-full hover:bg-slate-100 text-slate-400 hover:text-red-500 transition-colors">
+                                        <X size={24} />
+                                    </button>
+                                </div>
+
+                                <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
+                                    {doctors.length === 0 ? (
+                                        <p className="text-sm text-slate-400 text-center py-4">No doctors available.</p>
+                                    ) : doctors.map(doc => (
+                                        <div 
+                                            key={doc.u_id}
+                                            onClick={() => setVisitForm({...visitForm, doctor: doc.u_id})}
+                                            className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center gap-4 group ${
+                                                visitForm.doctor === doc.u_id 
+                                                ? 'border-blue-600 bg-blue-50 shadow-md' 
+                                                : 'border-slate-100 hover:border-blue-200 hover:bg-slate-50'
+                                            }`}
+                                        >
+                                            <div className={`w-12 h-12 rounded-xl flex items-center justify-center transition-colors ${
+                                                visitForm.doctor === doc.u_id ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400 group-hover:text-blue-500'
+                                            }`}>
+                                                <UserIcon size={20} />
                                             </div>
-                                        ))}
-                                    </div>
+                                            <div className="flex-1">
+                                                <p className={`font-bold text-sm ${visitForm.doctor === doc.u_id ? 'text-blue-900' : 'text-slate-900'}`}>
+                                                    Dr. {doc.username}
+                                                </p>
+                                                <p className="text-xs text-slate-400 font-medium">Available Now</p>
+                                            </div>
+                                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                                                visitForm.doctor === doc.u_id ? 'border-blue-600' : 'border-slate-300'
+                                            }`}>
+                                                {visitForm.doctor === doc.u_id && <div className="w-2.5 h-2.5 rounded-full bg-blue-600" />}
+                                            </div>
+                                        </div>
+                                    ))}
                                 </div>
 
-                                <div className="space-y-4">
-                                    <label className="text-xs font-black text-slate-700 ml-1 uppercase tracking-wider">Clinical Vitals</label>
-                                    <div className="grid grid-cols-2 gap-6 bg-slate-50/50 p-6 rounded-3xl border border-slate-100">
-                                        <Input
-                                            label="Temp (°C)"
-                                            placeholder="37.0"
-                                            value={visitForm.vitals.temp}
-                                            onChange={e => setVisitForm({ ...visitForm, vitals: { ...visitForm.vitals, temp: e.target.value } })}
-                                            className="bg-white border-none shadow-sm"
-                                        />
-                                        <Input
-                                            label="BP (mmHg)"
-                                            placeholder="120/80"
-                                            value={visitForm.vitals.bp}
-                                            onChange={e => setVisitForm({ ...visitForm, vitals: { ...visitForm.vitals, bp: e.target.value } })}
-                                            className="bg-white border-none shadow-sm"
-                                        />
-                                        <Input
-                                            label="Pulse (bpm)"
-                                            placeholder="72"
-                                            value={visitForm.vitals.pulse}
-                                            onChange={e => setVisitForm({ ...visitForm, vitals: { ...visitForm.vitals, pulse: e.target.value } })}
-                                            className="bg-white border-none shadow-sm"
-                                        />
-                                        <Input
-                                            label="Weight (kg)"
-                                            placeholder="70"
-                                            value={visitForm.vitals.weight}
-                                            onChange={e => setVisitForm({ ...visitForm, vitals: { ...visitForm.vitals, weight: e.target.value } })}
-                                            className="bg-white border-none shadow-sm"
-                                        />
-                                    </div>
-                                </div>
-
-                                <div className="pt-4 flex gap-4">
-                                    <Button variant="secondary" className="flex-1 h-14 rounded-2xl font-bold" onClick={() => setShowVisitModal(false)}>Discard</Button>
-                                    <Button type="submit" className="flex-1 h-14 rounded-2xl font-bold shadow-2xl shadow-sky-500/25">Send to Doctor Queue</Button>
-                                </div>
-                            </form>
+                                <button 
+                                    onClick={submitVisit}
+                                    disabled={!visitForm.doctor}
+                                    className="mt-6 w-full py-4 bg-slate-950 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-2xl shadow-xl shadow-slate-900/20 transition-all active:scale-[0.98] flex items-center justify-center gap-3"
+                                >
+                                    <span>Generate Token</span>
+                                    <ArrowRight size={18} />
+                                </button>
+                            </div>
                         </motion.div>
                     </div>
                 )}
