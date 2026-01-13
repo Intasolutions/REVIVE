@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-    UserPlus, Phone, User as UserIcon, ArrowRight, X, 
-    Activity, Thermometer, Heart, Scale, Stethoscope, 
+import {
+    UserPlus, Phone, User as UserIcon, ArrowRight, X,
+    Activity, Thermometer, Heart, Scale, Stethoscope,
     MapPin, ChevronRight, Search, CheckCircle2, AlertCircle
 } from 'lucide-react';
 import { useSearch } from '../context/SearchContext';
-import Pagination from '../components/Pagination'; 
+import Pagination from '../components/Pagination';
 import api from '../api/axios';
 
 // --- Sub-Component: Skeleton Loader (Premium Loading State) ---
@@ -27,13 +27,12 @@ const TableSkeleton = () => (
 
 // --- Sub-Component: Toast Notification (Replaces Alert) ---
 const Toast = ({ message, type, onClose }) => (
-    <motion.div 
+    <motion.div
         initial={{ opacity: 0, y: 50, scale: 0.9 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         exit={{ opacity: 0, y: 20, scale: 0.9 }}
-        className={`fixed bottom-6 right-6 flex items-center gap-3 px-6 py-4 rounded-2xl shadow-2xl z-[60] border ${
-            type === 'success' ? 'bg-white border-green-100' : 'bg-white border-red-100'
-        }`}
+        className={`fixed bottom-6 right-6 flex items-center gap-3 px-6 py-4 rounded-2xl shadow-2xl z-[120] border ${type === 'success' ? 'bg-white border-green-100' : 'bg-white border-red-100'
+            }`}
     >
         <div className={`p-2 rounded-full ${type === 'success' ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
             {type === 'success' ? <CheckCircle2 size={20} /> : <AlertCircle size={20} />}
@@ -56,11 +55,11 @@ const Reception = () => {
     const { globalSearch } = useSearch();
     const [loading, setLoading] = useState(true);
     const [page, setPage] = useState(1);
-    
+
     // Modals
     const [showAddModal, setShowAddModal] = useState(false);
     const [showVisitModal, setShowVisitModal] = useState(false);
-    
+
     // Data Selection
     const [selectedPatient, setSelectedPatient] = useState(null);
     const [doctors, setDoctors] = useState([]);
@@ -70,6 +69,7 @@ const Reception = () => {
 
     // Registration Form
     const [form, setForm] = useState({ full_name: '', age: '', gender: 'M', phone: '', address: '' });
+    const [errors, setErrors] = useState({});
 
     // Visit Form
     const [visitForm, setVisitForm] = useState({
@@ -99,7 +99,7 @@ const Reception = () => {
             showToast('error', 'Failed to load patients list.');
         } finally {
             // Artificial delay to show off the skeleton loader (Optional: remove in production)
-            setTimeout(() => setLoading(false), 500); 
+            setTimeout(() => setLoading(false), 500);
         }
     };
 
@@ -113,17 +113,44 @@ const Reception = () => {
         }
     };
 
+    const validateForm = () => {
+        let newErrors = {};
+        if (!form.full_name.trim()) newErrors.full_name = "Full Name is mandatory.";
+        if (!form.age || isNaN(form.age) || Number(form.age) <= 0) newErrors.age = "Please enter a valid age.";
+        if (!form.phone.trim()) newErrors.phone = "Phone Number is mandatory.";
+        else if (!/^\d{10}$/.test(form.phone)) newErrors.phone = "Phone number must be exactly 10 digits.";
+        if (!form.address.trim()) newErrors.address = "Residential address is mandatory.";
+
+        setErrors(newErrors);
+        return Object.keys(newErrors).length === 0;
+    };
+
     const handleRegister = async (e) => {
         e.preventDefault();
+
+        if (!validateForm()) {
+            showToast('error', 'Please fix the errors highlighted in the form.');
+            return;
+        }
+
         try {
-            await api.post('/reception/patients/register/', form);
+            const response = await api.post('/reception/patients/register/', form);
+
+            // Backend returns 200 OK if patient exists, 201 CREATED if new
+            if (response.status === 200) {
+                showToast('error', 'The patient is already there with this number');
+                return;
+            }
+
             setShowAddModal(false);
             setPage(1);
             fetchPatients();
             setForm({ full_name: '', age: '', gender: 'M', phone: '', address: '' });
+            setErrors({});
             showToast('success', 'New patient registered successfully!');
         } catch (err) {
-            showToast('error', 'Registration failed. Check phone number.');
+            console.error(err);
+            showToast('error', 'Registration failed. Please check network connection.');
         }
     };
 
@@ -154,14 +181,14 @@ const Reception = () => {
 
     return (
         <div className="p-6 md:p-8 min-h-screen bg-[#F8FAFC] font-sans text-slate-900 relative">
-            
+
             {/* --- Toast Notification Container --- */}
             <AnimatePresence>
                 {notification && (
-                    <Toast 
-                        message={notification.message} 
-                        type={notification.type} 
-                        onClose={() => setNotification(null)} 
+                    <Toast
+                        message={notification.message}
+                        type={notification.type}
+                        onClose={() => setNotification(null)}
                     />
                 )}
             </AnimatePresence>
@@ -176,8 +203,8 @@ const Reception = () => {
                         <span>Today: {new Date().toLocaleDateString()}</span>
                     </div>
                 </div>
-                <button 
-                    onClick={() => setShowAddModal(true)} 
+                <button
+                    onClick={() => setShowAddModal(true)}
                     className="group flex items-center gap-3 px-6 py-3.5 bg-slate-950 text-white rounded-2xl font-bold shadow-xl shadow-slate-900/20 hover:bg-blue-600 hover:shadow-blue-600/20 transition-all active:scale-[0.98]"
                 >
                     <div className="p-1 rounded-lg bg-white/20 group-hover:bg-white/30 transition-colors">
@@ -256,7 +283,7 @@ const Reception = () => {
                                                     </div>
                                                 </td>
                                                 <td className="px-6 py-5 text-right">
-                                                    <button 
+                                                    <button
                                                         onClick={() => handleNewVisit(p)}
                                                         className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-600 text-xs font-bold hover:bg-blue-600 hover:text-white hover:border-blue-600 transition-all shadow-sm active:scale-95"
                                                     >
@@ -271,11 +298,11 @@ const Reception = () => {
                             </table>
                         </div>
                         <div className="p-6 border-t border-slate-100 bg-slate-50/50">
-                            <Pagination 
-                                current={page} 
-                                total={totalPages} 
-                                onPageChange={setPage} 
-                                loading={loading} 
+                            <Pagination
+                                current={page}
+                                total={totalPages}
+                                onPageChange={setPage}
+                                loading={loading}
                             />
                         </div>
                     </>
@@ -283,21 +310,21 @@ const Reception = () => {
             </div>
 
             {/* --- MODAL: Patient Registration --- */}
-           {/* --- PREMIUM MODAL: Patient Registration --- */}
+            {/* --- PREMIUM MODAL: Patient Registration --- */}
             <AnimatePresence>
                 {showAddModal && (
                     <div className="fixed inset-0 z-[100] flex items-center justify-center px-4">
                         {/* 1. Glassmorphism Backdrop */}
-                        <motion.div 
-                            initial={{ opacity: 0 }} 
-                            animate={{ opacity: 1 }} 
+                        <motion.div
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
                             exit={{ opacity: 0 }}
-                            className="absolute inset-0 bg-slate-950/60 backdrop-blur-md transition-all" 
+                            className="absolute inset-0 bg-slate-950/60 backdrop-blur-md transition-all"
                             onClick={() => setShowAddModal(false)}
                         />
-                        
+
                         {/* 2. The Card */}
-                        <motion.div 
+                        <motion.div
                             initial={{ opacity: 0, scale: 0.9, y: 20 }}
                             animate={{ opacity: 1, scale: 1, y: 0 }}
                             exit={{ opacity: 0, scale: 0.9, y: 20 }}
@@ -315,48 +342,70 @@ const Reception = () => {
                                     </div>
                                     <p className="text-sm text-slate-500 font-medium ml-1">Create a digital health record.</p>
                                 </div>
-                                <button 
-                                    onClick={() => setShowAddModal(false)} 
+                                <button
+                                    onClick={() => setShowAddModal(false)}
                                     className="p-2.5 rounded-full bg-slate-50 hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
                                 >
                                     <X size={20} />
                                 </button>
                             </div>
-                            
+
                             {/* Form */}
                             <form onSubmit={handleRegister} className="p-10">
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                    
+
                                     {/* Full Name (Span 2 cols) */}
                                     <div className="md:col-span-2 space-y-2">
                                         <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Full Legal Name</label>
                                         <div className="relative group">
-                                            <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-600 transition-colors" size={18} />
-                                            <input 
-                                                type="text" 
-                                                className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-900 outline-none focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all placeholder:font-medium placeholder:text-slate-400"
+                                            <UserIcon className={`absolute left-4 top-1/2 -translate-y-1/2 transition-colors ${errors.full_name ? 'text-red-500' : 'text-slate-400 group-focus-within:text-blue-600'}`} size={18} />
+                                            <input
+                                                type="text"
+                                                className={`w-full pl-12 pr-4 py-4 bg-slate-50 border rounded-2xl font-bold text-slate-900 outline-none transition-all placeholder:font-medium placeholder:text-slate-400 ${errors.full_name
+                                                    ? 'border-red-500 focus:bg-red-50/10'
+                                                    : 'border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10'
+                                                    }`}
                                                 value={form.full_name}
-                                                onChange={e => setForm({...form, full_name: e.target.value})}
+                                                onChange={e => {
+                                                    setForm({ ...form, full_name: e.target.value });
+                                                    if (errors.full_name) setErrors({ ...errors, full_name: null });
+                                                }}
                                                 placeholder="e.g. Rahul Verma"
-                                                required
                                             />
                                         </div>
+                                        {errors.full_name && (
+                                            <p className="text-xs font-bold text-red-500 ml-1 flex items-center gap-1 animate-pulse">
+                                                <AlertCircle size={12} />
+                                                {errors.full_name}
+                                            </p>
+                                        )}
                                     </div>
 
                                     {/* Age */}
                                     <div className="space-y-2">
                                         <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Age</label>
                                         <div className="relative group">
-                                            <Activity className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-600 transition-colors" size={18} />
-                                            <input 
-                                                type="number" 
-                                                className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-900 outline-none focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all"
+                                            <Activity className={`absolute left-4 top-1/2 -translate-y-1/2 transition-colors ${errors.age ? 'text-red-500' : 'text-slate-400 group-focus-within:text-blue-600'}`} size={18} />
+                                            <input
+                                                type="number"
+                                                className={`w-full pl-12 pr-4 py-4 bg-slate-50 border rounded-2xl font-bold text-slate-900 outline-none transition-all ${errors.age
+                                                    ? 'border-red-500 focus:bg-red-50/10'
+                                                    : 'border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10'
+                                                    }`}
                                                 value={form.age}
-                                                onChange={e => setForm({...form, age: e.target.value})}
+                                                onChange={e => {
+                                                    setForm({ ...form, age: e.target.value });
+                                                    if (errors.age) setErrors({ ...errors, age: null });
+                                                }}
                                                 placeholder="Years"
-                                                required
                                             />
                                         </div>
+                                        {errors.age && (
+                                            <p className="text-xs font-bold text-red-500 ml-1 flex items-center gap-1 animate-pulse">
+                                                <AlertCircle size={12} />
+                                                {errors.age}
+                                            </p>
+                                        )}
                                     </div>
 
                                     {/* Gender (Segmented Control - Premium UX) */}
@@ -367,12 +416,11 @@ const Reception = () => {
                                                 <button
                                                     key={option}
                                                     type="button"
-                                                    onClick={() => setForm({...form, gender: option})}
-                                                    className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all duration-200 ${
-                                                        form.gender === option 
-                                                        ? 'bg-white text-blue-600 shadow-sm shadow-slate-200' 
+                                                    onClick={() => setForm({ ...form, gender: option })}
+                                                    className={`flex-1 py-3 rounded-xl text-sm font-bold transition-all duration-200 ${form.gender === option
+                                                        ? 'bg-white text-blue-600 shadow-sm shadow-slate-200'
                                                         : 'text-slate-400 hover:text-slate-600'
-                                                    }`}
+                                                        }`}
                                                 >
                                                     {option === 'M' ? 'Male' : option === 'F' ? 'Female' : 'Other'}
                                                 </button>
@@ -384,36 +432,59 @@ const Reception = () => {
                                     <div className="md:col-span-2 space-y-2">
                                         <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Phone Number</label>
                                         <div className="relative group">
-                                            <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-600 transition-colors" size={18} />
-                                            <input 
-                                                type="tel" 
-                                                className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-900 outline-none focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all placeholder:font-medium placeholder:text-slate-400"
+                                            <Phone className={`absolute left-4 top-1/2 -translate-y-1/2 transition-colors ${errors.phone ? 'text-red-500' : 'text-slate-400 group-focus-within:text-blue-600'}`} size={18} />
+                                            <input
+                                                type="tel"
+                                                className={`w-full pl-12 pr-4 py-4 bg-slate-50 border rounded-2xl font-bold text-slate-900 outline-none transition-all placeholder:font-medium placeholder:text-slate-400 ${errors.phone
+                                                    ? 'border-red-500 focus:bg-red-50/10'
+                                                    : 'border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10'
+                                                    }`}
                                                 value={form.phone}
-                                                onChange={e => setForm({...form, phone: e.target.value})}
+                                                onChange={e => {
+                                                    setForm({ ...form, phone: e.target.value });
+                                                    if (errors.phone) setErrors({ ...errors, phone: null });
+                                                }}
                                                 placeholder="10-digit mobile number"
-                                                required
                                             />
                                         </div>
+                                        {errors.phone && (
+                                            <p className="text-xs font-bold text-red-500 ml-1 flex items-center gap-1 animate-pulse">
+                                                <AlertCircle size={12} />
+                                                {errors.phone}
+                                            </p>
+                                        )}
                                     </div>
 
                                     {/* Address */}
                                     <div className="md:col-span-2 space-y-2">
                                         <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Residential Address</label>
                                         <div className="relative group">
-                                            <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-blue-600 transition-colors" size={18} />
-                                            <input 
-                                                type="text" 
-                                                className="w-full pl-12 pr-4 py-4 bg-slate-50 border border-slate-200 rounded-2xl font-bold text-slate-900 outline-none focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all placeholder:font-medium placeholder:text-slate-400"
+                                            <MapPin className={`absolute left-4 top-1/2 -translate-y-1/2 transition-colors ${errors.address ? 'text-red-500' : 'text-slate-400 group-focus-within:text-blue-600'}`} size={18} />
+                                            <input
+                                                type="text"
+                                                className={`w-full pl-12 pr-4 py-4 bg-slate-50 border rounded-2xl font-bold text-slate-900 outline-none transition-all placeholder:font-medium placeholder:text-slate-400 ${errors.address
+                                                    ? 'border-red-500 focus:bg-red-50/10'
+                                                    : 'border-slate-200 focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10'
+                                                    }`}
                                                 value={form.address}
-                                                onChange={e => setForm({...form, address: e.target.value})}
+                                                onChange={e => {
+                                                    setForm({ ...form, address: e.target.value });
+                                                    if (errors.address) setErrors({ ...errors, address: null });
+                                                }}
                                                 placeholder="Area, Street, City"
                                             />
                                         </div>
+                                        {errors.address && (
+                                            <p className="text-xs font-bold text-red-500 ml-1 flex items-center gap-1 animate-pulse">
+                                                <AlertCircle size={12} />
+                                                {errors.address}
+                                            </p>
+                                        )}
                                     </div>
                                 </div>
 
-                                <button 
-                                    type="submit" 
+                                <button
+                                    type="submit"
                                     className="mt-8 w-full py-4 bg-slate-950 hover:bg-blue-600 text-white font-bold rounded-2xl shadow-xl shadow-slate-900/10 hover:shadow-blue-600/20 transition-all active:scale-[0.98] flex items-center justify-center gap-2"
                                 >
                                     <span>Complete Registration</span>
@@ -429,12 +500,12 @@ const Reception = () => {
             <AnimatePresence>
                 {showVisitModal && selectedPatient && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
-                        <motion.div 
+                        <motion.div
                             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                            className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" 
+                            className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
                             onClick={() => setShowVisitModal(false)}
                         />
-                        <motion.div 
+                        <motion.div
                             initial={{ opacity: 0, scale: 0.95, y: 20 }}
                             animate={{ opacity: 1, scale: 1, y: 0 }}
                             exit={{ opacity: 0, scale: 0.95, y: 20 }}
@@ -454,11 +525,11 @@ const Reception = () => {
                                             <Thermometer size={16} className="text-rose-400" />
                                         </div>
                                         <div className="flex items-baseline gap-1">
-                                            <input 
+                                            <input
                                                 type="text" placeholder="98.6"
                                                 className="w-full text-2xl font-bold text-slate-900 outline-none placeholder:text-slate-200"
                                                 value={visitForm.vitals.temp}
-                                                onChange={e => setVisitForm({...visitForm, vitals: {...visitForm.vitals, temp: e.target.value}})}
+                                                onChange={e => setVisitForm({ ...visitForm, vitals: { ...visitForm.vitals, temp: e.target.value } })}
                                             />
                                             <span className="text-xs font-bold text-slate-400">°F</span>
                                         </div>
@@ -470,11 +541,11 @@ const Reception = () => {
                                             <Heart size={16} className="text-red-500" />
                                         </div>
                                         <div className="flex items-baseline gap-1">
-                                            <input 
+                                            <input
                                                 type="text" placeholder="120/80"
                                                 className="w-full text-2xl font-bold text-slate-900 outline-none placeholder:text-slate-200"
                                                 value={visitForm.vitals.bp}
-                                                onChange={e => setVisitForm({...visitForm, vitals: {...visitForm.vitals, bp: e.target.value}})}
+                                                onChange={e => setVisitForm({ ...visitForm, vitals: { ...visitForm.vitals, bp: e.target.value } })}
                                             />
                                             <span className="text-xs font-bold text-slate-400">mm</span>
                                         </div>
@@ -486,11 +557,11 @@ const Reception = () => {
                                             <Activity size={16} className="text-emerald-500" />
                                         </div>
                                         <div className="flex items-baseline gap-1">
-                                            <input 
+                                            <input
                                                 type="text" placeholder="72"
                                                 className="w-full text-2xl font-bold text-slate-900 outline-none placeholder:text-slate-200"
                                                 value={visitForm.vitals.pulse}
-                                                onChange={e => setVisitForm({...visitForm, vitals: {...visitForm.vitals, pulse: e.target.value}})}
+                                                onChange={e => setVisitForm({ ...visitForm, vitals: { ...visitForm.vitals, pulse: e.target.value } })}
                                             />
                                             <span className="text-xs font-bold text-slate-400">bpm</span>
                                         </div>
@@ -502,11 +573,11 @@ const Reception = () => {
                                             <Scale size={16} className="text-blue-500" />
                                         </div>
                                         <div className="flex items-baseline gap-1">
-                                            <input 
+                                            <input
                                                 type="text" placeholder="70"
                                                 className="w-full text-2xl font-bold text-slate-900 outline-none placeholder:text-slate-200"
                                                 value={visitForm.vitals.weight}
-                                                onChange={e => setVisitForm({...visitForm, vitals: {...visitForm.vitals, weight: e.target.value}})}
+                                                onChange={e => setVisitForm({ ...visitForm, vitals: { ...visitForm.vitals, weight: e.target.value } })}
                                             />
                                             <span className="text-xs font-bold text-slate-400">kg</span>
                                         </div>
@@ -530,18 +601,16 @@ const Reception = () => {
                                     {doctors.length === 0 ? (
                                         <p className="text-sm text-slate-400 text-center py-4">No doctors available.</p>
                                     ) : doctors.map(doc => (
-                                        <div 
+                                        <div
                                             key={doc.u_id}
-                                            onClick={() => setVisitForm({...visitForm, doctor: doc.u_id})}
-                                            className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center gap-4 group ${
-                                                visitForm.doctor === doc.u_id 
-                                                ? 'border-blue-600 bg-blue-50 shadow-md' 
+                                            onClick={() => setVisitForm({ ...visitForm, doctor: doc.u_id })}
+                                            className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center gap-4 group ${visitForm.doctor === doc.u_id
+                                                ? 'border-blue-600 bg-blue-50 shadow-md'
                                                 : 'border-slate-100 hover:border-blue-200 hover:bg-slate-50'
-                                            }`}
+                                                }`}
                                         >
-                                            <div className={`w-12 h-12 rounded-xl flex items-center justify-center transition-colors ${
-                                                visitForm.doctor === doc.u_id ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400 group-hover:text-blue-500'
-                                            }`}>
+                                            <div className={`w-12 h-12 rounded-xl flex items-center justify-center transition-colors ${visitForm.doctor === doc.u_id ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400 group-hover:text-blue-500'
+                                                }`}>
                                                 <UserIcon size={20} />
                                             </div>
                                             <div className="flex-1">
@@ -550,16 +619,15 @@ const Reception = () => {
                                                 </p>
                                                 <p className="text-xs text-slate-400 font-medium">Available Now</p>
                                             </div>
-                                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                                                visitForm.doctor === doc.u_id ? 'border-blue-600' : 'border-slate-300'
-                                            }`}>
+                                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${visitForm.doctor === doc.u_id ? 'border-blue-600' : 'border-slate-300'
+                                                }`}>
                                                 {visitForm.doctor === doc.u_id && <div className="w-2.5 h-2.5 rounded-full bg-blue-600" />}
                                             </div>
                                         </div>
                                     ))}
                                 </div>
 
-                                <button 
+                                <button
                                     onClick={submitVisit}
                                     disabled={!visitForm.doctor}
                                     className="mt-6 w-full py-4 bg-slate-950 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-2xl shadow-xl shadow-slate-900/20 transition-all active:scale-[0.98] flex items-center justify-center gap-3"
