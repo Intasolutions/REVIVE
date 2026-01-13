@@ -7,8 +7,8 @@ class PatientSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Patient
-        fields = ['p_id', 'full_name', 'age', 'gender', 'phone', 'address', 'id_proof', 'created_at', 'updated_at']
-        read_only_fields = ['p_id', 'created_at', 'updated_at']
+        fields = ['id', 'p_id', 'full_name', 'age', 'gender', 'phone', 'address', 'id_proof', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'p_id', 'created_at', 'updated_at']
 
     def validate_phone(self, value):
         cleaned = value.strip()
@@ -28,12 +28,23 @@ class VisitSerializer(serializers.ModelSerializer):
     class Meta:
         model = Visit
         fields = [
-            'id', 'v_id', 'patient', 'patient_name', 'doctor', 'doctor_name',
-            'status', 'vitals', 'created_at', 'updated_at'
+            'id', 'v_id', 'patient', 'patient_name', 'doctor', 'doctor_name', 'assigned_role',
+            'status', 'vitals', 'prescription', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'v_id', 'created_at', 'updated_at']
 
+    prescription = serializers.SerializerMethodField()
+
+    def get_prescription(self, obj):
+        # Safely get prescription from related DoctorNote
+        if hasattr(obj, 'doctor_note'):
+            return obj.doctor_note.prescription
+        return None
+
     def validate_doctor(self, doctor):
+        # Allow doctor to be null if assigned_role is not DOCTOR, but if provided, must be a doctor?
+        # Actually logic: If assigned_role is DOCTOR, a doctor user SHOULD arguably be selected, but maybe not mandatory immediately.
+        # If doctor IS provided, they MUST be a doctor role.
         if doctor and getattr(doctor, "role", None) != "DOCTOR":
             raise serializers.ValidationError("Selected user is not a doctor.")
         return doctor

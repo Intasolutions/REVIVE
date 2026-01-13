@@ -73,9 +73,11 @@ const Reception = () => {
 
     // Visit Form
     const [visitForm, setVisitForm] = useState({
+        assigned_role: 'DOCTOR',
         doctor: '',
         vitals: { temp: '', bp: '', pulse: '', weight: '' }
     });
+
 
     // --- Helper: Show Notification ---
     const showToast = (type, message) => {
@@ -165,12 +167,13 @@ const Reception = () => {
         try {
             await api.post('/reception/visits/', {
                 patient: selectedPatient.p_id,
-                doctor: visitForm.doctor,
+                doctor: visitForm.assigned_role === 'DOCTOR' ? visitForm.doctor : null,
+                assigned_role: visitForm.assigned_role,
                 status: 'OPEN',
                 vitals: visitForm.vitals
             });
             setShowVisitModal(false);
-            setVisitForm({ doctor: '', vitals: { temp: '', bp: '', pulse: '', weight: '' } });
+            setVisitForm({ assigned_role: 'DOCTOR', doctor: '', vitals: { temp: '', bp: '', pulse: '', weight: '' } });
             showToast('success', `Visit token generated for ${selectedPatient.full_name}`);
         } catch (err) {
             showToast('error', 'Failed to create visit record.');
@@ -585,51 +588,83 @@ const Reception = () => {
                                 </div>
                             </div>
 
-                            {/* Right: Doctor Selection */}
+                            {/* Right: Department & Doctor Selection */}
                             <div className="md:w-1/2 p-8 flex flex-col">
                                 <div className="flex justify-between items-center mb-6">
                                     <h3 className="text-lg font-bold text-slate-900 flex items-center gap-2">
                                         <Stethoscope className="text-slate-900" size={20} />
-                                        Assign Doctor
+                                        Assign To
                                     </h3>
                                     <button onClick={() => setShowVisitModal(false)} className="p-1 rounded-full hover:bg-slate-100 text-slate-400 hover:text-red-500 transition-colors">
                                         <X size={24} />
                                     </button>
                                 </div>
 
-                                <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
-                                    {doctors.length === 0 ? (
-                                        <p className="text-sm text-slate-400 text-center py-4">No doctors available.</p>
-                                    ) : doctors.map(doc => (
-                                        <div
-                                            key={doc.u_id}
-                                            onClick={() => setVisitForm({ ...visitForm, doctor: doc.u_id })}
-                                            className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center gap-4 group ${visitForm.doctor === doc.u_id
-                                                ? 'border-blue-600 bg-blue-50 shadow-md'
-                                                : 'border-slate-100 hover:border-blue-200 hover:bg-slate-50'
-                                                }`}
-                                        >
-                                            <div className={`w-12 h-12 rounded-xl flex items-center justify-center transition-colors ${visitForm.doctor === doc.u_id ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400 group-hover:text-blue-500'
-                                                }`}>
-                                                <UserIcon size={20} />
-                                            </div>
-                                            <div className="flex-1">
-                                                <p className={`font-bold text-sm ${visitForm.doctor === doc.u_id ? 'text-blue-900' : 'text-slate-900'}`}>
-                                                    Dr. {doc.username}
-                                                </p>
-                                                <p className="text-xs text-slate-400 font-medium">Available Now</p>
-                                            </div>
-                                            <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${visitForm.doctor === doc.u_id ? 'border-blue-600' : 'border-slate-300'
-                                                }`}>
-                                                {visitForm.doctor === doc.u_id && <div className="w-2.5 h-2.5 rounded-full bg-blue-600" />}
-                                            </div>
-                                        </div>
-                                    ))}
+                                {/* Department Selection */}
+                                <div className="mb-4">
+                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Department / Role</label>
+                                    <select
+                                        value={visitForm.assigned_role}
+                                        onChange={(e) => setVisitForm({ ...visitForm, assigned_role: e.target.value })}
+                                        className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 outline-none focus:border-blue-500 transition-all"
+                                    >
+                                        <option value="DOCTOR">Doctor (Consultation)</option>
+                                        <option value="LAB">Laboratory</option>
+                                        <option value="PHARMACY">Pharmacy</option>
+                                        <option value="CASUALTY">Casualty / Emergency</option>
+                                    </select>
                                 </div>
+
+                                {visitForm.assigned_role === 'DOCTOR' ? (
+                                    <div className="flex-1 overflow-y-auto space-y-3 pr-2 custom-scrollbar">
+                                        <label className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 block">Select Doctor</label>
+                                        {doctors.length === 0 ? (
+                                            <p className="text-sm text-slate-400 text-center py-4">No doctors available.</p>
+                                        ) : doctors.map(doc => (
+                                            <div
+                                                key={doc.u_id}
+                                                onClick={() => setVisitForm({ ...visitForm, doctor: doc.u_id })}
+                                                className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex items-center gap-4 group ${visitForm.doctor === doc.u_id
+                                                    ? 'border-blue-600 bg-blue-50 shadow-md'
+                                                    : 'border-slate-100 hover:border-blue-200 hover:bg-slate-50'
+                                                    }`}
+                                            >
+                                                <div className={`w-12 h-12 rounded-xl flex items-center justify-center transition-colors ${visitForm.doctor === doc.u_id ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400 group-hover:text-blue-500'
+                                                    }`}>
+                                                    <UserIcon size={20} />
+                                                </div>
+                                                <div className="flex-1">
+                                                    <p className={`font-bold text-sm ${visitForm.doctor === doc.u_id ? 'text-blue-900' : 'text-slate-900'}`}>
+                                                        Dr. {doc.username}
+                                                    </p>
+                                                    <p className="text-xs text-slate-400 font-medium">Available Now</p>
+                                                </div>
+                                                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${visitForm.doctor === doc.u_id ? 'border-blue-600' : 'border-slate-300'
+                                                    }`}>
+                                                    {visitForm.doctor === doc.u_id && <div className="w-2.5 h-2.5 rounded-full bg-blue-600" />}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                ) : (
+                                    <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                                        <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mb-3 shadow-sm">
+                                            {visitForm.assigned_role === 'LAB' && <Activity className="text-blue-500" size={32} />}
+                                            {visitForm.assigned_role === 'PHARMACY' && <Pill className="text-emerald-500" size={32} />}
+                                            {visitForm.assigned_role === 'CASUALTY' && <AlertCircle className="text-red-500" size={32} />}
+                                        </div>
+                                        <h4 className="font-bold text-slate-900">
+                                            Assign to {visitForm.assigned_role === 'LAB' ? 'Laboratory' : visitForm.assigned_role === 'PHARMACY' ? 'Pharmacy' : 'Casualty'}
+                                        </h4>
+                                        <p className="text-xs text-slate-500 mt-1 max-w-[200px]">
+                                            Patient will be added to the {visitForm.assigned_role.toLowerCase()} queue directly.
+                                        </p>
+                                    </div>
+                                )}
 
                                 <button
                                     onClick={submitVisit}
-                                    disabled={!visitForm.doctor}
+                                    disabled={visitForm.assigned_role === 'DOCTOR' && !visitForm.doctor}
                                     className="mt-6 w-full py-4 bg-slate-950 hover:bg-slate-800 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-2xl shadow-xl shadow-slate-900/20 transition-all active:scale-[0.98] flex items-center justify-center gap-3"
                                 >
                                     <span>Generate Token</span>

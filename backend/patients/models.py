@@ -38,6 +38,18 @@ class Visit(BaseModel):
         blank=True,
         related_name='assigned_visits'
     )
+    assigned_role = models.CharField(
+        max_length=20, 
+        choices=(
+            ('ADMIN', 'Admin'),
+            ('RECEPTION', 'Reception'),
+            ('DOCTOR', 'Doctor'),
+            ('LAB', 'Lab'),
+            ('PHARMACY', 'Pharmacy'),
+            ('CASUALTY', 'Casualty'),
+        ), 
+        default='DOCTOR'
+    )
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='OPEN')
     vitals = models.JSONField(default=dict, blank=True)
 

@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { 
-    Stethoscope, ClipboardList, Send, User, Activity, X, Search, 
-    Plus, FileText, Trash2, ChevronRight, Clock, Pill, 
+import {
+    Stethoscope, ClipboardList, Send, User, Activity, X, Search,
+    Plus, FileText, Trash2, ChevronRight, Clock, Pill,
     CalendarDays, History, CheckCircle2, AlertCircle, Sparkles
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
@@ -30,7 +30,7 @@ const Doctor = () => {
     const { user } = useAuth();
     const { showToast } = useToast();
     const { globalSearch } = useSearch();
-    
+
     // Data States
     const [visitsData, setVisitsData] = useState({ results: [], count: 0 });
     const [selectedVisit, setSelectedVisit] = useState(null);
@@ -41,11 +41,13 @@ const Doctor = () => {
 
     // Form States
     const [notes, setNotes] = useState({ diagnosis: '', prescription: {}, notes: '' });
-    
+
     // Medicine States
     const [medSearch, setMedSearch] = useState('');
     const [medResults, setMedResults] = useState([]);
     const [selectedMeds, setSelectedMeds] = useState([]);
+    const [referral, setReferral] = useState('NONE'); // NONE, LAB, PHARMACY, CASUALTY
+
 
     // --- Effects ---
     useEffect(() => {
@@ -57,7 +59,9 @@ const Doctor = () => {
             // Reset forms when switching patients
             setNotes({ diagnosis: '', prescription: {}, notes: '' });
             setSelectedMeds([]);
+            setReferral('NONE');
             fetchPatientHistory(selectedVisit.patient_id || selectedVisit.patient);
+
         } else {
             setPatientHistory([]);
         }
@@ -144,12 +148,17 @@ const Doctor = () => {
                 ...notes,
                 prescription: prescriptionObj
             });
-            
-            await api.patch(`/reception/visits/${selectedVisit.v_id || selectedVisit.id}/`, { status: 'CLOSED' });
-            
-            showToast('success', 'Consultation saved & patient discharged');
+
+            const updatePayload = referral !== 'NONE'
+                ? { status: 'OPEN', assigned_role: referral, doctor: null } // Release to other dept
+                : { status: 'CLOSED' }; // Discharge
+
+            await api.patch(`/reception/visits/${selectedVisit.v_id || selectedVisit.id}/`, updatePayload);
+
+            showToast('success', referral !== 'NONE' ? `Referred to ${referral}` : 'Consultation saved & patient discharged');
             setSelectedVisit(null);
             fetchQueue();
+
         } catch (err) {
             showToast('error', 'Failed to save consultation details');
         }
@@ -159,7 +168,7 @@ const Doctor = () => {
 
     return (
         <div className="p-6 h-screen bg-[#F8FAFC] font-sans text-slate-900 overflow-hidden flex flex-col">
-            
+
             {/* --- Top Bar --- */}
             <div className="flex justify-between items-center mb-6 shrink-0">
                 <div>
@@ -173,14 +182,14 @@ const Doctor = () => {
 
             {/* --- Main Workspace (Grid) --- */}
             <div className="flex-1 grid grid-cols-12 gap-6 min-h-0">
-                
+
                 {/* --- LEFT: Patient Queue (4 Cols) --- */}
                 <div className="col-span-3 bg-white rounded-[24px] border border-slate-100 shadow-sm flex flex-col overflow-hidden">
                     <div className="p-5 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
                         <h3 className="font-bold text-slate-700 text-sm uppercase tracking-wide">Waiting Room</h3>
                         <span className="bg-slate-200 text-slate-600 px-2 py-0.5 rounded-full text-xs font-bold">{visitsData.count || 0}</span>
                     </div>
-                    
+
                     <div className="flex-1 overflow-y-auto custom-scrollbar">
                         {loading ? (
                             <QueueSkeleton />
@@ -199,15 +208,13 @@ const Doctor = () => {
                                         <div
                                             key={v.v_id || v.id}
                                             onClick={() => setSelectedVisit(v)}
-                                            className={`p-4 cursor-pointer transition-all hover:bg-slate-50 relative group ${
-                                                isActive ? 'bg-blue-50/50' : ''
-                                            }`}
+                                            className={`p-4 cursor-pointer transition-all hover:bg-slate-50 relative group ${isActive ? 'bg-blue-50/50' : ''
+                                                }`}
                                         >
                                             {isActive && <div className="absolute left-0 top-0 bottom-0 w-1 bg-blue-600 rounded-r-full" />}
                                             <div className="flex items-center gap-3">
-                                                <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold shadow-sm transition-colors ${
-                                                    isActive ? 'bg-blue-600 text-white shadow-blue-200' : 'bg-white border border-slate-100 text-slate-500'
-                                                }`}>
+                                                <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm font-bold shadow-sm transition-colors ${isActive ? 'bg-blue-600 text-white shadow-blue-200' : 'bg-white border border-slate-100 text-slate-500'
+                                                    }`}>
                                                     {v.patient_name ? v.patient_name[0] : 'U'}
                                                 </div>
                                                 <div className="flex-1 min-w-0">
@@ -227,7 +234,7 @@ const Doctor = () => {
                         )}
                     </div>
                     <div className="p-3 border-t border-slate-100">
-                         <Pagination current={page} total={totalPages} onPageChange={setPage} loading={loading} compact={true} />
+                        <Pagination current={page} total={totalPages} onPageChange={setPage} loading={loading} compact={true} />
                     </div>
                 </div>
 
@@ -246,22 +253,34 @@ const Doctor = () => {
                                         <div className="flex items-center gap-3 text-xs font-bold text-slate-500 mt-1 uppercase tracking-wide">
                                             <span>ID: {(selectedVisit.v_id || selectedVisit.id).slice(0, 8)}</span>
                                             <span className="w-1 h-1 bg-slate-300 rounded-full" />
-                                            <span className="text-blue-600">Male • 34 Yrs</span> {/* Add age/gender from API if available */}
+                                            <span className="text-blue-600">Male • 34 Yrs</span>
                                         </div>
                                     </div>
                                 </div>
-                                <div className="flex gap-3">
-                                    <button 
+                                <div className="flex gap-3 items-center">
+                                    <select
+                                        value={referral}
+                                        onChange={(e) => setReferral(e.target.value)}
+                                        className="h-10 pl-3 pr-8 bg-white border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:border-blue-500 hover:border-blue-300 transition-all cursor-pointer"
+                                    >
+                                        <option value="NONE">No Referral</option>
+                                        <option value="LAB">Refer to Lab</option>
+                                        <option value="PHARMACY">Refer to Pharmacy</option>
+                                        <option value="CASUALTY">Refer to Casualty</option>
+                                    </select>
+
+                                    <button
                                         onClick={() => setSelectedVisit(null)}
                                         className="px-4 py-2 rounded-xl text-slate-500 font-bold text-xs hover:bg-slate-100 transition-colors"
                                     >
                                         Hold Patient
                                     </button>
-                                    <button 
+                                    <button
                                         onClick={handleSaveConsultation}
-                                        className="px-6 py-2 bg-slate-950 text-white rounded-xl font-bold text-xs shadow-lg shadow-slate-900/20 hover:bg-blue-600 transition-all flex items-center gap-2 active:scale-95"
+                                        className={`px-6 py-2 text-white rounded-xl font-bold text-xs shadow-lg transition-all flex items-center gap-2 active:scale-95 ${referral !== 'NONE' ? 'bg-indigo-600 shadow-indigo-600/20 hover:bg-indigo-700' : 'bg-slate-950 shadow-slate-900/20 hover:bg-blue-600'}`}
                                     >
-                                        <Send size={14} /> Finalize & Discharge
+                                        <Send size={14} />
+                                        {referral !== 'NONE' ? 'Refer & Release' : 'Finalize & Discharge'}
                                     </button>
                                 </div>
                             </div>
@@ -269,10 +288,10 @@ const Doctor = () => {
                             {/* Scrollable Workspace */}
                             <div className="flex-1 overflow-y-auto p-8 custom-scrollbar">
                                 <div className="grid grid-cols-3 gap-8">
-                                    
+
                                     {/* Main Clinical Column (2/3) */}
                                     <div className="col-span-2 space-y-8">
-                                        
+
                                         {/* Diagnosis Section */}
                                         <div className="group">
                                             <label className="flex items-center gap-2 text-sm font-bold text-slate-700 mb-3">
@@ -295,7 +314,7 @@ const Doctor = () => {
                                                     <div className="p-1.5 bg-emerald-100 rounded-lg text-emerald-600"><Pill size={16} /></div>
                                                     Prescription Pad
                                                 </label>
-                                                
+
                                                 {/* Medicine Search */}
                                                 <div className="relative w-64 z-20">
                                                     <Search className="absolute left-3 top-2.5 text-slate-400" size={14} />
@@ -307,7 +326,7 @@ const Doctor = () => {
                                                     />
                                                     <AnimatePresence>
                                                         {medResults.length > 0 && (
-                                                            <motion.div 
+                                                            <motion.div
                                                                 initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
                                                                 className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-xl shadow-xl max-h-56 overflow-y-auto divide-y divide-slate-50"
                                                             >
@@ -337,7 +356,7 @@ const Doctor = () => {
                                                 ) : (
                                                     <AnimatePresence>
                                                         {selectedMeds.map((med, idx) => (
-                                                            <motion.div 
+                                                            <motion.div
                                                                 key={med.name}
                                                                 initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}
                                                                 className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4 items-center"
@@ -348,34 +367,34 @@ const Doctor = () => {
                                                                     </div>
                                                                     <span className="font-bold text-slate-800 text-sm">{med.name}</span>
                                                                 </div>
-                                                                
+
                                                                 {/* Smart Inputs */}
                                                                 <div className="flex items-center gap-2 w-full md:w-auto">
                                                                     <div className="relative group">
                                                                         <label className="absolute -top-2 left-2 px-1 bg-white text-[9px] font-bold text-slate-400 uppercase">Dosage</label>
-                                                                        <input 
-                                                                            value={med.dosage} 
+                                                                        <input
+                                                                            value={med.dosage}
                                                                             onChange={(e) => updateMedField(med.name, 'dosage', e.target.value)}
-                                                                            className="w-20 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-center focus:border-blue-500 outline-none" 
+                                                                            className="w-20 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-center focus:border-blue-500 outline-none"
                                                                         />
                                                                     </div>
                                                                     <div className="relative group">
                                                                         <label className="absolute -top-2 left-2 px-1 bg-white text-[9px] font-bold text-slate-400 uppercase">Duration</label>
-                                                                        <input 
-                                                                            value={med.duration} 
+                                                                        <input
+                                                                            value={med.duration}
                                                                             onChange={(e) => updateMedField(med.name, 'duration', e.target.value)}
-                                                                            className="w-20 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-center focus:border-blue-500 outline-none" 
+                                                                            className="w-20 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-center focus:border-blue-500 outline-none"
                                                                         />
                                                                     </div>
                                                                     <div className="relative group">
                                                                         <label className="absolute -top-2 left-2 px-1 bg-white text-[9px] font-bold text-slate-400 uppercase">Qty</label>
-                                                                        <input 
-                                                                            value={med.count} 
+                                                                        <input
+                                                                            value={med.count}
                                                                             onChange={(e) => updateMedField(med.name, 'count', e.target.value)}
-                                                                            className="w-16 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-center focus:border-blue-500 outline-none" 
+                                                                            className="w-16 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-center focus:border-blue-500 outline-none"
                                                                         />
                                                                     </div>
-                                                                    <button 
+                                                                    <button
                                                                         onClick={() => removeMedicine(med.name)}
                                                                         className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors ml-2"
                                                                     >
@@ -393,10 +412,10 @@ const Doctor = () => {
                                     {/* Right Sidebar: History & Info (1/3) */}
                                     <div className="col-span-1 border-l border-slate-100 pl-8">
                                         <div className="sticky top-0 space-y-8">
-                                            
+
                                             {/* Vital Stats (Mockup/Placeholder) */}
                                             <div className="space-y-4">
-                                                 <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                                                <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
                                                     <Activity size={16} className="text-rose-500" /> Vitals Today
                                                 </label>
                                                 <div className="grid grid-cols-2 gap-3">
@@ -419,7 +438,7 @@ const Doctor = () => {
                                                 <div className="space-y-0 relative">
                                                     {/* Vertical Line */}
                                                     <div className="absolute left-2.5 top-2 bottom-0 w-0.5 bg-slate-100" />
-                                                    
+
                                                     {historyLoading ? (
                                                         <div className="pl-8 text-xs text-slate-400">Loading history...</div>
                                                     ) : patientHistory.length === 0 ? (
@@ -452,8 +471,8 @@ const Doctor = () => {
                     ) : (
                         // Empty State
                         <div className="flex-1 flex flex-col items-center justify-center text-center p-12">
-                              
-                             {/* ^ Example trigger for illustrative purpose, in real code replace with: */}
+
+                            {/* ^ Example trigger for illustrative purpose, in real code replace with: */}
                             <div className="w-24 h-24 bg-blue-50 rounded-full flex items-center justify-center mb-6 animate-pulse">
                                 <Stethoscope size={48} className="text-blue-200" />
                             </div>
@@ -465,7 +484,7 @@ const Doctor = () => {
                     )}
                 </div>
             </div>
-        </div>
+        </div >
     );
 };
 

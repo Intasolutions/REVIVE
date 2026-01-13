@@ -87,6 +87,8 @@ const Pharmacy = () => {
     const [medResults, setMedResults] = useState([]);
     const [lastSale, setLastSale] = useState(null);
     const [showPrintModal, setShowPrintModal] = useState(false);
+    const [pendingVisits, setPendingVisits] = useState([]);
+
 
     // Uploads & Purchases
     const [selectedImport, setSelectedImport] = useState(null);
@@ -104,7 +106,9 @@ const Pharmacy = () => {
     useEffect(() => {
         if (activeTab === 'inventory') fetchStock();
         if (activeTab === 'purchases') fetchRecentImports();
+        if (activeTab === 'pos') fetchPendingVisits();
     }, [activeTab, page, globalSearch, rowsPerPage, filterSupplier]);
+
 
     // --- API CALLS ---
     const fetchSuppliers = async () => {
@@ -119,14 +123,23 @@ const Pharmacy = () => {
             if (globalSearch) url += `&search=${encodeURIComponent(globalSearch)}`;
             if (filterSupplier) url += `&supplier=${filterSupplier}`;
             const { data } = await api.get(url);
-            setStockData(data);
-        } catch (err) { console.error(err); }
+            setStockData(data || { results: [], count: 0 });
+        } catch (err) { console.error(err); setStockData({ results: [], count: 0 }); }
         finally { setLoading(false); }
     };
+
 
     const fetchRecentImports = async () => {
         try { const { data } = await api.get('pharmacy/purchases/'); setRecentImports(data.results || data); } catch (err) { console.error(err); }
     };
+
+    const fetchPendingVisits = async () => {
+        try {
+            const { data } = await api.get(`reception/visits/?assigned_role=PHARMACY&status=OPEN`);
+            setPendingVisits(data.results || data || []);
+        } catch (err) { console.error("Failed to fetch pharmacy queue", err); }
+    };
+
 
     // --- POS Logic ---
     const searchPatients = async (q) => {
@@ -141,9 +154,13 @@ const Pharmacy = () => {
     };
     const searchMeds = async (q) => {
         setMedSearch(q);
-        if (q.length < 2) { setMedResults([]); return; }
-        try { const { data } = await api.get(`pharmacy/stock/?search=${q}`); setMedResults(data.results || data); } catch (err) { }
+        if (!q || q.length < 2) { setMedResults([]); return; }
+        try {
+            const { data } = await api.get(`pharmacy/stock/?search=${q}`);
+            setMedResults(data.results || data || []);
+        } catch (err) { setMedResults([]); }
     };
+
 
     const addToCart = (med) => {
         const existing = cart.find(item => item.med_id === med.med_id);
@@ -188,6 +205,13 @@ const Pharmacy = () => {
         try {
             const { data } = await api.post('pharmacy/sales/', payload);
             setLastSale({ ...data, patient: selectedPatient, doctor: selectedDoctor, details: cart });
+
+            // If this was a prescription visit, close it
+            if (selectedPatient?.v_id) {
+                await api.patch(`reception/visits/${selectedPatient.v_id}/`, { status: 'CLOSED' });
+                fetchPendingVisits(); // Refresh queue
+            }
+
             setShowPrintModal(true);
             setCart([]);
             setSelectedPatient(null);
@@ -195,6 +219,67 @@ const Pharmacy = () => {
             showToast('success', 'Bill generated successfully');
         } catch (err) { showToast('error', "Checkout failed."); }
     };
+
+    const loadPrescription = async (visit) => {
+        setSelectedPatient({ ...visit.patient, full_name: visit.patient_name, v_id: visit.id });
+        // Try to infer doctor name (it might be null in visit if referred, but we show what we have)
+        if (visit.doctor_name) setSelectedDoctor({ username: visit.doctor_name, u_id: visit.doctor });
+        else setSelectedDoctor({ username: 'Referral', u_id: null });
+
+        if (!visit.prescription) {
+            showToast('info', 'No digital prescription found.');
+            return;
+        }
+
+        // Auto-fill cart based on prescription matching
+        // Prescription format: { "DrugName": "Dosage | Duration | Qty: 5" }
+        setLoading(true);
+        const newCart = [];
+        const notFound = [];
+
+        try {
+            // We need to search for each item. This is heavy, maybe optimize later?
+            // For now, let's try to match by name from a quick search or pre-fetched stock? 
+            // Better: Searching one by one is slow. 
+            // Solution: We'll exact match against loaded stock if possible, otherwise just warn user.
+            // Actually, we can't search well without API. 
+            // Let's iterate keys and call search API for each? 
+            // Limited number of meds usually.
+
+            const medNames = Object.keys(visit.prescription);
+            for (const name of medNames) {
+                const details = visit.prescription[name];
+                // details string ex: "1-0-1 | 5 Days | Qty: 10"
+                // Extract Qty
+                let qty = 1;
+                const qtyMatch = details.match(/Qty:\s*(\d+)/i);
+                if (qtyMatch) qty = parseInt(qtyMatch[1]);
+
+                // Search strictly
+                const { data } = await api.get(`pharmacy/stock/?search=${encodeURIComponent(name)}`);
+                const results = data.results || data || [];
+                const match = results.find(r => r.name.toLowerCase() === name.toLowerCase()) || results[0];
+
+                if (match) {
+                    // Check if already in cart (unlikely since we just started)
+                    newCart.push({ ...match, qty: qty });
+                } else {
+                    notFound.push(name);
+                }
+            }
+
+            setCart(newCart);
+            if (notFound.length > 0) showToast('warning', `Could not find stock for: ${notFound.join(', ')}`);
+            if (newCart.length > 0) showToast('success', 'Prescription loaded into cart');
+
+        } catch (err) {
+            console.error(err);
+            showToast('error', 'Error loading prescription items');
+        } finally {
+            setLoading(false);
+        }
+    };
+
 
     // --- Bulk Upload Logic ---
     const handleFileChange = (e) => {
@@ -290,9 +375,10 @@ const Pharmacy = () => {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-50">
-                                    {stockData.results.map(s => (
+                                    {(stockData?.results || []).map(s => (
                                         <tr key={s.med_id} className="hover:bg-slate-50 transition-colors group">
                                             <td className="px-6 py-3">
+
                                                 <div className="flex items-center gap-3">
                                                     <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold"><Pill size={14} /></div>
                                                     <div>
@@ -339,174 +425,208 @@ const Pharmacy = () => {
                 {/* 2. POS TAB */}
                 {activeTab === 'pos' && (
                     <div className="flex h-full divide-x divide-slate-100">
-                        {/* LEFT: Action Center (65%) */}
-                        <div className="w-[65%] flex flex-col bg-[#F8FAFC]">
+                        {/* LEFT: Action Center + Queue (65%) */}
+                        <div className="w-[65%] flex">
 
-                            <div className="p-6 bg-white border-b border-slate-100 space-y-4">
-                                <div className="flex gap-4">
-                                    {/* Patient Select */}
-                                    <div className="flex-1 relative group">
-                                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500"><User size={16} /></div>
-                                        <input
-                                            className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none"
-                                            placeholder="Search Patient (Name/Phone)..."
-                                            value={selectedPatient ? selectedPatient.full_name : patientSearch}
-                                            onChange={e => { setSelectedPatient(null); searchPatients(e.target.value); }}
-                                        />
-                                        {patients.length > 0 && !selectedPatient && (
-                                            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-100 rounded-xl shadow-xl z-20 overflow-hidden max-h-48 overflow-y-auto">
-                                                {patients.map(p => (
-                                                    <div key={p.p_id} onClick={() => { setSelectedPatient(p); setPatients([]); setPatientSearch(''); }} className="px-4 py-3 hover:bg-slate-50 cursor-pointer text-sm font-bold text-slate-700 border-b border-slate-50 last:border-0">
-                                                        {p.full_name} <span className="text-slate-400 font-normal">({p.phone})</span>
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
-                                        {selectedPatient && <X className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer hover:text-red-500" size={14} onClick={() => { setSelectedPatient(null); setPatientSearch(''); }} />}
-                                    </div>
-                                    {/* Doctor Select */}
-                                    <div className="flex-1 relative group">
-                                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500"><Activity size={16} /></div>
-                                        <input
-                                            className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none"
-                                            placeholder="Assign Doctor..."
-                                            value={selectedDoctor ? selectedDoctor.username : doctorSearch}
-                                            onChange={e => { setSelectedDoctor(null); searchDoctors(e.target.value); }}
-                                        />
-                                        {doctors.length > 0 && !selectedDoctor && (
-                                            <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-100 rounded-xl shadow-xl z-20 overflow-hidden max-h-48 overflow-y-auto">
-                                                {doctors.map(d => (
-                                                    <div key={d.u_id} onClick={() => { setSelectedDoctor(d); setDoctors([]); setDoctorSearch(''); }} className="px-4 py-3 hover:bg-slate-50 cursor-pointer text-sm font-bold text-slate-700 border-b border-slate-50 last:border-0">
-                                                        Dr. {d.username}
-                                                    </div>
-                                                ))}
-                                            </div>
-                                        )}
-                                        {selectedDoctor && <X className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer hover:text-red-500" size={14} onClick={() => { setSelectedDoctor(null); setDoctorSearch(''); }} />}
-                                    </div>
+                            {/* Queue Sidebar (25% of left = ~16% total) */}
+                            <div className="w-[30%] bg-slate-50 border-r border-slate-100 flex flex-col">
+                                <div className="p-4 border-b border-slate-100">
+                                    <h3 className="font-black text-slate-700 uppercase tracking-wider text-xs flex items-center gap-2">
+                                        <Clock size={14} /> Pending Rx
+                                    </h3>
                                 </div>
-                            </div>
-
-                            {/* Main Product Search */}
-                            <div className="p-6 flex-1 overflow-hidden flex flex-col">
-                                <div className="relative mb-6">
-                                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-                                    <input
-                                        className="w-full pl-12 pr-4 py-4 bg-white border-2 border-blue-100 rounded-2xl text-lg font-medium text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none shadow-sm"
-                                        placeholder="Scan barcode or type medicine name..."
-                                        value={medSearch}
-                                        onChange={e => searchMeds(e.target.value)}
-                                        autoFocus
-                                    />
-                                </div>
-
-                                {/* Results Grid */}
-                                <div className="flex-1 overflow-y-auto">
-                                    {medResults.length > 0 ? (
-                                        <div className="grid grid-cols-2 gap-4 pb-20">
-                                            {medResults.map(m => (
-                                                <div
-                                                    key={m.med_id}
-                                                    onClick={() => addToCart(m)}
-                                                    className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:border-blue-200 cursor-pointer transition-all group flex flex-col justify-between h-32"
-                                                >
-                                                    <div className="flex justify-between items-start">
-                                                        <div>
-                                                            <h4 className="font-bold text-slate-900 line-clamp-1">{m.name}</h4>
-                                                            <p className="text-[10px] font-bold text-slate-400 uppercase mt-1">{m.manufacturer}</p>
-                                                        </div>
-                                                        <div className="w-8 h-8 rounded-lg bg-slate-50 text-slate-400 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-colors">
-                                                            <Plus size={16} />
-                                                        </div>
-                                                    </div>
-                                                    <div className="flex justify-between items-end">
-                                                        <div className={`text-xs font-bold px-2 py-1 rounded-md ${m.qty_available < 10 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
-                                                            Stock: {m.qty_available}
-                                                        </div>
-                                                        <p className="text-xl font-black text-slate-900">₹{m.selling_price}</p>
-                                                    </div>
-                                                </div>
-                                            ))}
+                                <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                                    {pendingVisits.length === 0 ? (
+                                        <div className="text-center py-10 opacity-50">
+                                            <p className="text-[10px] uppercase font-bold text-slate-400">No Pending Rx</p>
                                         </div>
                                     ) : (
-                                        <div className="h-full flex flex-col items-center justify-center text-slate-300">
-                                            <Search size={48} className="mb-4 opacity-50" />
-                                            <p className="font-bold text-sm">Start typing to search inventory...</p>
-                                        </div>
+                                        pendingVisits.map(v => (
+                                            <div
+                                                key={v.id}
+                                                onClick={() => loadPrescription(v)}
+                                                className="p-3 bg-white border border-slate-200 rounded-xl cursor-pointer hover:border-blue-400 hover:shadow-md transition-all group"
+                                            >
+                                                <div className="flex justify-between items-start mb-1">
+                                                    <h4 className="font-bold text-sm text-slate-900 line-clamp-1">{v.patient_name}</h4>
+                                                    <span className="text-[9px] font-black bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase self-start">New</span>
+                                                </div>
+                                                <p className="text-[10px] text-slate-500 mb-2 truncate">Dr. {v.doctor_name || 'Referral'}</p>
+                                                <div className="flex items-center gap-1 text-[10px] text-slate-400">
+                                                    <Calendar size={10} /> {new Date(v.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                                </div>
+                                            </div>
+                                        ))
                                     )}
                                 </div>
                             </div>
-                        </div>
 
-                        {/* RIGHT: The Bill / Invoice (35%) */}
-                        <div className="w-[35%] bg-white flex flex-col shadow-[-10px_0_40px_-15px_rgba(0,0,0,0.05)] z-20">
-                            <div className="p-6 border-b border-slate-100 bg-slate-50">
-                                <div className="flex justify-between items-center mb-4">
-                                    <h2 className="text-sm font-black text-slate-900 uppercase tracking-widest flex items-center gap-2">
-                                        <ShoppingCart size={16} className="text-blue-600" /> Current Bill
-                                    </h2>
-                                    <span className="text-xs font-bold text-slate-400">{new Date().toLocaleDateString()}</span>
-                                </div>
-                                {selectedPatient ? (
-                                    <div className="p-3 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
-                                        <div>
-                                            <p className="text-[10px] text-slate-400 font-bold uppercase">Billed To</p>
-                                            <p className="text-sm font-bold text-slate-900">{selectedPatient.full_name}</p>
+                            {/* Search & Actions (Remaining of LEFT) */}
+                            <div className="flex-1 flex flex-col bg-[#F8FAFC]">
+                                <div className="p-6 bg-white border-b border-slate-100 space-y-4">
+                                    <div className="flex gap-4">
+                                        {/* Patient Select */}
+                                        <div className="flex-1 relative group">
+                                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500"><User size={16} /></div>
+                                            <input
+                                                className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none"
+                                                placeholder="Search Patient (Name/Phone)..."
+                                                value={selectedPatient ? selectedPatient.full_name : patientSearch}
+                                                onChange={e => { setSelectedPatient(null); searchPatients(e.target.value); }}
+                                            />
+                                            {patients.length > 0 && !selectedPatient && (
+                                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-100 rounded-xl shadow-xl z-20 overflow-hidden max-h-48 overflow-y-auto">
+                                                    {patients.map(p => (
+                                                        <div key={p.p_id} onClick={() => { setSelectedPatient(p); setPatients([]); setPatientSearch(''); }} className="px-4 py-3 hover:bg-slate-50 cursor-pointer text-sm font-bold text-slate-700 border-b border-slate-50 last:border-0">
+                                                            {p.full_name} <span className="text-slate-400 font-normal">({p.phone})</span>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            {selectedPatient && <X className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer hover:text-red-500" size={14} onClick={() => { setSelectedPatient(null); setPatientSearch(''); }} />}
                                         </div>
-                                        <button onClick={() => setSelectedPatient(null)} className="text-slate-400 hover:text-red-500"><X size={16} /></button>
-                                    </div>
-                                ) : (
-                                    <div className="p-3 bg-yellow-50 border border-yellow-100 rounded-xl text-xs font-bold text-yellow-700 text-center">
-                                        Walk-In Customer (No Name)
-                                    </div>
-                                )}
-                            </div>
-
-                            <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-white">
-                                {cart.length === 0 ? (
-                                    <div className="flex flex-col items-center justify-center h-48 opacity-40">
-                                        <ShoppingCart size={40} className="mb-2" />
-                                        <p className="text-xs font-bold uppercase">Empty Cart</p>
-                                    </div>
-                                ) : cart.map((item, idx) => (
-                                    <div key={idx} className="flex justify-between items-center p-3 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors">
-                                        <div className="flex-1">
-                                            <p className="text-sm font-bold text-slate-900 line-clamp-1">{item.name}</p>
-                                            <p className="text-[10px] text-slate-400 font-mono">₹{item.selling_price} x {item.qty}</p>
+                                        {/* Doctor Select */}
+                                        <div className="flex-1 relative group">
+                                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500"><Activity size={16} /></div>
+                                            <input
+                                                className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none"
+                                                placeholder="Assign Doctor..."
+                                                value={selectedDoctor ? selectedDoctor.username : doctorSearch}
+                                                onChange={e => { setSelectedDoctor(null); searchDoctors(e.target.value); }}
+                                            />
+                                            {doctors.length > 0 && !selectedDoctor && (
+                                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-100 rounded-xl shadow-xl z-20 overflow-hidden max-h-48 overflow-y-auto">
+                                                    {doctors.map(d => (
+                                                        <div key={d.u_id} onClick={() => { setSelectedDoctor(d); setDoctors([]); setDoctorSearch(''); }} className="px-4 py-3 hover:bg-slate-50 cursor-pointer text-sm font-bold text-slate-700 border-b border-slate-50 last:border-0">
+                                                            Dr. {d.username}
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            )}
+                                            {selectedDoctor && <X className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer hover:text-red-500" size={14} onClick={() => { setSelectedDoctor(null); setDoctorSearch(''); }} />}
                                         </div>
-                                        <div className="flex items-center gap-3">
-                                            <p className="text-sm font-black text-slate-900">₹{(item.selling_price * item.qty).toFixed(2)}</p>
-                                            <button onClick={() => {
-                                                const newCart = cart.filter(c => c.med_id !== item.med_id);
-                                                setCart(newCart);
-                                            }} className="text-slate-300 hover:text-red-500 transition-colors">
-                                                <Trash2 size={14} />
-                                            </button>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-
-                            <div className="p-6 bg-slate-50 border-t border-slate-100 space-y-4">
-                                <div className="space-y-2">
-                                    <div className="border-t border-dashed border-slate-300 pt-2 flex justify-between items-end">
-                                        <span className="text-xs font-black text-slate-900 uppercase tracking-wider">Net Payable</span>
-                                        <span className="text-3xl font-black text-slate-900 leading-none">₹{calculateTotals().net.toFixed(2)}</span>
                                     </div>
                                 </div>
-                                <button
-                                    onClick={handleCheckout}
-                                    disabled={cart.length === 0}
-                                    className="w-full py-4 bg-slate-900 hover:bg-blue-600 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-2xl font-bold shadow-lg shadow-slate-900/10 transition-all active:scale-[0.98] flex items-center justify-center gap-2 uppercase tracking-widest text-xs"
-                                >
-                                    <Printer size={16} /> Print & Checkout
-                                </button>
+
+                                {/* Main Product Search */}
+                                <div className="p-6 flex-1 overflow-hidden flex flex-col">
+                                    <div className="relative mb-6">
+                                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                                        <input
+                                            className="w-full pl-12 pr-4 py-4 bg-white border-2 border-blue-100 rounded-2xl text-lg font-medium text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none shadow-sm"
+                                            placeholder="Scan barcode or type medicine name..."
+                                            value={medSearch}
+                                            onChange={e => searchMeds(e.target.value)}
+                                            autoFocus
+                                        />
+                                    </div>
+
+                                    {/* Results Grid */}
+                                    <div className="flex-1 overflow-y-auto">
+                                        {medResults.length > 0 ? (
+                                            <div className="grid grid-cols-2 gap-4 pb-20">
+                                                {medResults.map(m => (
+                                                    <div
+                                                        key={m.med_id}
+                                                        onClick={() => addToCart(m)}
+                                                        className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:border-blue-200 cursor-pointer transition-all group flex flex-col justify-between h-32"
+                                                    >
+                                                        <div className="flex justify-between items-start">
+                                                            <div>
+                                                                <h4 className="font-bold text-slate-900 line-clamp-1">{m.name}</h4>
+                                                                <p className="text-[10px] font-bold text-slate-400 uppercase mt-1">{m.manufacturer}</p>
+                                                            </div>
+                                                            <div className="w-8 h-8 rounded-lg bg-slate-50 text-slate-400 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                                                                <Plus size={16} />
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex justify-between items-end">
+                                                            <div className={`text-xs font-bold px-2 py-1 rounded-md ${m.qty_available < 10 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                                                                Stock: {m.qty_available}
+                                                            </div>
+                                                            <p className="text-xl font-black text-slate-900">₹{m.selling_price}</p>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <div className="h-full flex flex-col items-center justify-center text-slate-300">
+                                                <Search size={48} className="mb-4 opacity-50" />
+                                                <p className="font-bold text-sm">Start typing to search inventory...</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* RIGHT: The Bill / Invoice (35%) */}
+                            <div className="w-[35%] bg-white flex flex-col shadow-[-10px_0_40px_-15px_rgba(0,0,0,0.05)] z-20">
+                                <div className="p-6 border-b border-slate-100 bg-slate-50">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h2 className="text-sm font-black text-slate-900 uppercase tracking-widest flex items-center gap-2">
+                                            <ShoppingCart size={16} className="text-blue-600" /> Current Bill
+                                        </h2>
+                                        <span className="text-xs font-bold text-slate-400">{new Date().toLocaleDateString()}</span>
+                                    </div>
+                                    {selectedPatient ? (
+                                        <div className="p-3 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
+                                            <div>
+                                                <p className="text-[10px] text-slate-400 font-bold uppercase">Billed To</p>
+                                                <p className="text-sm font-bold text-slate-900">{selectedPatient.full_name}</p>
+                                            </div>
+                                            <button onClick={() => setSelectedPatient(null)} className="text-slate-400 hover:text-red-500"><X size={16} /></button>
+                                        </div>
+                                    ) : (
+                                        <div className="p-3 bg-yellow-50 border border-yellow-100 rounded-xl text-xs font-bold text-yellow-700 text-center">
+                                            Walk-In Customer (No Name)
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-white">
+                                    {cart.length === 0 ? (
+                                        <div className="flex flex-col items-center justify-center h-48 opacity-40">
+                                            <ShoppingCart size={40} className="mb-2" />
+                                            <p className="text-xs font-bold uppercase">Empty Cart</p>
+                                        </div>
+                                    ) : cart.map((item, idx) => (
+                                        <div key={idx} className="flex justify-between items-center p-3 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors">
+                                            <div className="flex-1">
+                                                <p className="text-sm font-bold text-slate-900 line-clamp-1">{item.name}</p>
+                                                <p className="text-[10px] text-slate-400 font-mono">₹{item.selling_price} x {item.qty}</p>
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <p className="text-sm font-black text-slate-900">₹{(item.selling_price * item.qty).toFixed(2)}</p>
+                                                <button onClick={() => {
+                                                    const newCart = cart.filter(c => c.med_id !== item.med_id);
+                                                    setCart(newCart);
+                                                }} className="text-slate-300 hover:text-red-500 transition-colors">
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+
+                                <div className="p-6 bg-slate-50 border-t border-slate-100 space-y-4">
+                                    <div className="space-y-2">
+                                        <div className="border-t border-dashed border-slate-300 pt-2 flex justify-between items-end">
+                                            <span className="text-xs font-black text-slate-900 uppercase tracking-wider">Net Payable</span>
+                                            <span className="text-3xl font-black text-slate-900 leading-none">₹{calculateTotals().net.toFixed(2)}</span>
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={handleCheckout}
+                                        disabled={cart.length === 0}
+                                        className="w-full py-4 bg-slate-900 hover:bg-blue-600 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-2xl font-bold shadow-lg shadow-slate-900/10 transition-all active:scale-[0.98] flex items-center justify-center gap-2 uppercase tracking-widest text-xs"
+                                    >
+                                        <Printer size={16} /> Print & Checkout
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
                 )}
-
-                {/* 3. PURCHASES - RESTORED & UPGRADED */}
                 {activeTab === 'purchases' && (
                     <div className="flex h-full divide-x divide-slate-100">
                         {/* Left: Upload Station (35%) */}
@@ -592,7 +712,7 @@ const Pharmacy = () => {
                                 <table className="w-full text-left border-collapse">
                                     <thead className="bg-slate-50 sticky top-0 shadow-sm">
                                         <tr>
-                                            {[ 'Supplier', 'Date', 'Items', 'Action'].map(h => (
+                                            {['Supplier', 'Date', 'Items', 'Action'].map(h => (
                                                 <th key={h} className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">{h}</th>
                                             ))}
                                         </tr>

@@ -1,5 +1,6 @@
 from rest_framework import generics, permissions, viewsets, filters
 from rest_framework.decorators import action
+from rest_framework.response import Response
 from django.contrib.auth import get_user_model
 
 from .serializers import UserSerializer, RegisterSerializer

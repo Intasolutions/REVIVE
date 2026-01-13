@@ -20,7 +20,7 @@ class DoctorNoteViewSet(viewsets.ModelViewSet):
     serializer_class = DoctorNoteSerializer
     permission_classes = [IsDoctor]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['visit__patient', 'visit__doctor']
+    filterset_fields = ['visit', 'visit__id', 'visit__patient', 'visit__doctor']
     search_fields = ['diagnosis', 'notes']
     ordering_fields = ['created_at']
 

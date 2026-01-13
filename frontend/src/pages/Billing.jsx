@@ -60,7 +60,8 @@ const Billing = () => {
     const fetchPendingVisits = async () => {
         try {
             const res = await api.get(`billing/invoices/pending_visits/`);
-            setPendingVisits(res.data);
+            const data = Array.isArray(res.data) ? res.data : [];
+            setPendingVisits(data);
         } catch (err) {
             console.error("Error fetching pending visits:", err);
         }
@@ -82,9 +83,12 @@ const Billing = () => {
                 api.get(`reception/patients/`),
                 api.get(`pharmacy/stock/`)
             ]);
-            setDoctors(docRes.data);
-            setPatients(patRes.data);
-            setPharmacyStock(stockRes.data);
+
+            const getArray = (data) => Array.isArray(data) ? data : (data.results || []);
+
+            setDoctors(getArray(docRes.data));
+            setPatients(getArray(patRes.data));
+            setPharmacyStock(getArray(stockRes.data));
         } catch (err) {
             console.error("Error fetching metadata:", err);
         }
@@ -93,15 +97,18 @@ const Billing = () => {
     const handleBillNow = async (visit) => {
         // Determine IDs safely from serializer
         // Visit serializer might return nested patient object or just ID
-        const patId = typeof visit.patient === 'object' ? visit.patient.id : visit.patient;
-        const docId = typeof visit.doctor === 'object' ? visit.doctor.id : visit.doctor;
+        const patId = (visit.patient && typeof visit.patient === 'object') ? visit.patient.id : visit.patient;
+        const docId = (visit.doctor && typeof visit.doctor === 'object') ? visit.doctor.id : visit.doctor;
 
         // Find objects in our lists for safe name display
         const patientObj = patients.find(p => p.id === patId);
         const doctorObj = doctors.find(d => d.id === docId);
 
+        // Use patient_name directly from visit if available, else look up
+        const patientName = visit.patient_name || (patientObj ? patientObj.full_name : "Unknown");
+
         setFormData({
-            patient_name: patientObj ? patientObj.full_name : "Unknown",
+            patient_name: patientName,
             visit: visit.id || visit.v_id,
             doctor: docId || "",
             payment_status: "PENDING",
@@ -113,20 +120,41 @@ const Billing = () => {
         setShowModal(true);
 
         // Attempt Auto-Import with a small delay to allow state update or just pass ID
-        setTimeout(() => handleImportPrescription(patId), 300);
+        const visitIdToPass = (visit.id || visit.v_id);
+        setTimeout(() => handleImportPrescription(patId, visitIdToPass), 300);
     };
 
-    const handleImportPrescription = async (overridePatientId = null) => {
+    const handleImportPrescription = async (overridePatientId = null, overrideVisitId = null) => {
         const patId = overridePatientId || selectedPatientId;
         if (!patId) {
             alert("Please select a patient first.");
             return;
         }
         try {
-            const res = await api.get(`medical/doctor-notes/?visit__patient=${patId}`);
+            // Try fetching by Specific Visit ID (safest) or Patient
+            let url = `medical/doctor-notes/?visit__patient=${patId}`;
+
+            // Prioritize explicit ID, then form state
+            const vId = overrideVisitId || ((typeof formData.visit === 'object') ? formData.visit.id : formData.visit);
+
+            if (vId) {
+                // Use visit filter for robustness (backend accepts both visit and visit__id)
+                url = `medical/doctor-notes/?visit=${vId}`;
+            }
+
+            console.log("Fetching notes from:", url); // Debugging
+            const res = await api.get(url);
+
             if (res.data.length > 0) {
                 const lastNote = res.data[0];
                 const newItems = [];
+
+                // AUTO-FILL DOCTOR if missing
+                if (!formData.doctor || formData.doctor === "") {
+                    if (lastNote.created_by) {
+                        setFormData(prev => ({ ...prev, doctor: lastNote.created_by }));
+                    }
+                }
 
                 // Parse prescription JSON
                 if (Array.isArray(lastNote.prescription)) {
@@ -158,7 +186,10 @@ const Billing = () => {
                     alert("No medicines found in the last prescription.");
                 }
             } else {
-                alert("No doctor notes found for this patient.");
+                // If specific visit failed, maybe try patient fallback? 
+                // For now, alerting specific message helps debugging
+                console.warn("No notes found for URL:", url);
+                alert("No doctor notes found for this visit.");
             }
         } catch (err) {
             console.error("Error importing prescription:", err);
@@ -259,20 +290,18 @@ const Billing = () => {
 
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                         {pendingVisits.map(visit => {
-                            // Safely access patient name regardless of serializer depth
-                            const patName = typeof visit.patient === 'object'
-                                ? visit.patient.full_name
-                                : (patients.find(p => p.id === visit.patient)?.full_name || "Unknown Patient");
+                            // Use patient_name directly from serializer
+                            const patName = visit.patient_name || "Unknown Patient";
 
                             return (
                                 <div key={visit.id} className="bg-white p-4 rounded-lg border border-blue-100 shadow-sm flex items-center justify-between group hover:shadow-md transition-all">
                                     <div className="flex items-center gap-3">
                                         <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 font-bold">
-                                            {patName[0]}
+                                            {patName?.[0] || "?"}
                                         </div>
                                         <div>
                                             <h4 className="font-semibold text-slate-900">{patName}</h4>
-                                            <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">Visit #{visit.id?.toString().slice(0, 6)}</span>
+                                            <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">Visit #{(visit.id?.toString() || "").slice(0, 6)}</span>
                                         </div>
                                     </div>
                                     <button
@@ -291,9 +320,9 @@ const Billing = () => {
             {/* Stats Cards */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 {[
-                    { label: "Today's Revenue", value: `₹${stats.revenue_today.toLocaleString()}`, icon: IndianRupee, color: "blue" },
-                    { label: "Pending Amount", value: `₹${stats.pending_amount.toLocaleString()}`, icon: Clock, color: "amber" },
-                    { label: "Invoices Generated", value: stats.invoices_today, icon: FileText, color: "emerald" },
+                    { label: "Today's Revenue", value: `₹${(stats?.revenue_today || 0).toLocaleString()}`, icon: IndianRupee, color: "blue" },
+                    { label: "Pending Amount", value: `₹${(stats?.pending_amount || 0).toLocaleString()}`, icon: Clock, color: "amber" },
+                    { label: "Invoices Generated", value: stats?.invoices_today || 0, icon: FileText, color: "emerald" },
                 ].map((stat, i) => (
                     <div key={i} className="bg-white p-5 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
                         <div>
@@ -334,9 +363,9 @@ const Billing = () => {
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                        {invoices.filter(inv => inv.patient_name?.toLowerCase().includes(searchTerm.toLowerCase()) || inv.id.toString().includes(searchTerm)).map((invoice) => (
+                        {invoices.filter(inv => (inv.patient_name || "").toLowerCase().includes(searchTerm.toLowerCase()) || (inv.id || "").toString().includes(searchTerm)).map((invoice) => (
                             <tr key={invoice.id} className="hover:bg-slate-50/50 transition-colors group">
-                                <td className="px-6 py-4 font-mono text-slate-500">#{invoice.id.toString().slice(0, 8)}</td>
+                                <td className="px-6 py-4 font-mono text-slate-500">#{(invoice.id?.toString() || "").slice(0, 8)}</td>
                                 <td className="px-6 py-4 font-medium text-slate-900 flex items-center gap-3">
                                     <div className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs font-bold">
                                         {invoice.patient_name?.[0] || "G"}

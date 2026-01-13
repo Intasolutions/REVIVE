@@ -52,7 +52,7 @@ class VisitViewSet(viewsets.ModelViewSet):
     serializer_class = VisitSerializer
     permission_classes = [IsReceptionistOrAdmin]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['status', 'patient', 'doctor']
+    filterset_fields = ['status', 'patient', 'doctor', 'assigned_role']
     search_fields = ['patient__full_name', 'patient__phone']
     ordering_fields = ['created_at', 'updated_at']
 

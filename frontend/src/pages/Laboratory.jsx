@@ -25,7 +25,9 @@ const TEST_TEMPLATES = {
 
 const Laboratory = () => {
     const [chargesData, setChargesData] = useState({ results: [], count: 0 });
+    const [pendingVisits, setPendingVisits] = useState([]); // Visits assigned to LAB
     const [inventoryData, setInventoryData] = useState({ results: [], count: 0 });
+
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState('queue');
     const [showModal, setShowModal] = useState(false);
@@ -56,9 +58,13 @@ const Laboratory = () => {
     });
 
     useEffect(() => {
-        if (activeTab === 'queue') fetchCharges();
+        if (activeTab === 'queue') {
+            fetchCharges();
+            fetchPendingVisits();
+        }
         else fetchInventory();
     }, [activeTab, page, globalSearch, statusFilter]);
+
 
     const fetchCharges = async () => {
         setLoading(true);
@@ -71,6 +77,17 @@ const Laboratory = () => {
             setLoading(false);
         }
     };
+
+    const fetchPendingVisits = async () => {
+        try {
+            // Fetch visits assigned to LAB that are OPEN
+            const { data } = await api.get(`reception/visits/?assigned_role=LAB&status=OPEN`);
+            setPendingVisits(data.results || data || []);
+        } catch (err) {
+            console.error("Failed to fetch pending visits", err);
+        }
+    };
+
 
     const fetchInventory = async () => {
         setLoading(true);
@@ -213,6 +230,53 @@ const Laboratory = () => {
 
                     <div className="overflow-x-auto">
                         <Table headers={['Patient', 'Test Requested', 'Age/Sex', 'Ref/Date', 'Status', 'Amount', 'Actions']}>
+                            {/* Pending Visits Section */}
+                            {pendingVisits.length > 0 && statusFilter === 'ALL' && page === 1 && (
+                                <>
+                                    {pendingVisits.map(v => (
+                                        <tr key={v.id} className="bg-blue-50/50 hover:bg-blue-50 transition-colors border-b border-blue-100">
+                                            <td className="px-6 py-4">
+                                                <p className="font-bold text-slate-900">{v.patient_name}</p>
+                                                <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider">New Assign</span>
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <span className="text-sm font-medium text-slate-400 italic">-- Pending Test --</span>
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <span className="text-sm text-gray-600">--</span> {/* Age/Sex if avail */}
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <div className="flex flex-col">
+                                                    <span className="text-xs text-slate-500">Dr. {v.doctor_name || 'Referral'}</span>
+                                                    <span className="text-[10px] text-slate-400">{new Date(v.created_at).toLocaleDateString()}</span>
+                                                </div>
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <span className="inline-flex px-2.5 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700">
+                                                    WAITING
+                                                </span>
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <span className="text-sm text-slate-400">---</span>
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <button
+                                                    onClick={() => { setSelectedVisit(v); setShowModal(true); }}
+                                                    className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded-lg hover:bg-blue-700 shadow-sm shadow-blue-500/20 transition-all"
+                                                >
+                                                    <Plus size={14} />
+                                                    Add Test
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                    <tr>
+                                        <td colSpan="7" className="px-6 py-2 bg-gray-50/50 text-[10px] font-bold text-gray-400 uppercase tracking-widest text-center">
+                                            Recent Charges below
+                                        </td>
+                                    </tr>
+                                </>
+                            )}
                             {loading ? (
                                 <tr><td colSpan="7" className="text-center py-16">
                                     <Activity className="mx-auto text-blue-500 animate-spin mb-2" size={24} />
