@@ -8,7 +8,7 @@ User = get_user_model()
 
 @receiver(post_save, sender=PharmacyStock)
 def check_low_stock(sender, instance, **kwargs):
-    if instance.qty_available < 10:
+    if instance.qty_available < instance.reorder_level:
         # Check if a recent notification already exists to avoid spam
         # This is a basic implementation. Ideally we'd have a 'last_notified' field.
         # check if active notification exists for this stock

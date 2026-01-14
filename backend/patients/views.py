@@ -8,12 +8,13 @@ from .models import Patient, Visit
 from .serializers import PatientSerializer, VisitSerializer
 
 
-from .permissions import IsReceptionistOrAdmin
+from core.permissions import IsHospitalStaff
 
 class PatientViewSet(viewsets.ModelViewSet):
     queryset = Patient.objects.all().order_by('-created_at')
     serializer_class = PatientSerializer
-    permission_classes = [IsReceptionistOrAdmin]
+    permission_classes = [IsHospitalStaff]
+
     filter_backends = [filters.SearchFilter]
     search_fields = ['full_name', 'phone']
 
@@ -50,7 +51,8 @@ class PatientViewSet(viewsets.ModelViewSet):
 class VisitViewSet(viewsets.ModelViewSet):
     queryset = Visit.objects.all().order_by('-created_at')
     serializer_class = VisitSerializer
-    permission_classes = [IsReceptionistOrAdmin]
+    permission_classes = [IsHospitalStaff]
+
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ['status', 'patient', 'doctor', 'assigned_role']
     search_fields = ['patient__full_name', 'patient__phone']
@@ -58,7 +60,13 @@ class VisitViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         visit = serializer.save()
-        if visit.doctor:
+        match_role = None
+        
+        # Determine who to notify
+        if visit.assigned_role and visit.assigned_role != 'DOCTOR':
+            match_role = visit.assigned_role
+        elif visit.doctor:
+            # Single doctor notification (legacy/specific)
             from core.models import Notification
             Notification.objects.create(
                 recipient=visit.doctor,
@@ -66,15 +74,53 @@ class VisitViewSet(viewsets.ModelViewSet):
                 type='VISIT_ASSIGNED',
                 related_id=visit.id
             )
+            return
+
+        if match_role:
+            from core.models import Notification
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            
+            # Broadcast to all active users in that role
+            recipients = User.objects.filter(role=match_role, is_active=True)
+            notifications = [
+                Notification(
+                    recipient=u,
+                    message=f"New Patient in Queue: {visit.patient.full_name}",
+                    type='VISIT_ASSIGNED',
+                    related_id=visit.id
+                ) for u in recipients
+            ]
+            Notification.objects.bulk_create(notifications)
 
     def perform_update(self, serializer):
         old_doctor = serializer.instance.doctor
+        old_role = serializer.instance.assigned_role
         visit = serializer.save()
+        
+        # Check for Doctor change
         if visit.doctor and visit.doctor != old_doctor:
             from core.models import Notification
             Notification.objects.create(
                 recipient=visit.doctor,
-                message=f"New patient assigned: {visit.patient.full_name}",
+                message=f"Transferred patient: {visit.patient.full_name}",
                 type='VISIT_ASSIGNED',
                 related_id=visit.id
             )
+            
+        # Check for Role change (Referral)
+        if visit.assigned_role and visit.assigned_role != old_role and visit.assigned_role != 'DOCTOR':
+            from core.models import Notification
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            
+            recipients = User.objects.filter(role=visit.assigned_role, is_active=True)
+            notifications = [
+                Notification(
+                    recipient=u,
+                    message=f"New Referral: {visit.patient.full_name} (from {old_role or 'Reception'})",
+                    type='VISIT_ASSIGNED',
+                    related_id=visit.id
+                ) for u in recipients
+            ]
+            Notification.objects.bulk_create(notifications)

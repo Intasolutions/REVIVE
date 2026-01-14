@@ -10,7 +10,7 @@ class IsDoctor(permissions.BasePermission):
 
 class IsCasualty(permissions.BasePermission):
     def has_permission(self, request, view):
-        return bool(request.user and request.user.is_authenticated and getattr(request.user, "role", None) == "CASUALTY")
+        return bool(request.user and request.user.is_authenticated and getattr(request.user, "role", None) in ["CASUALTY", "ADMIN"])
 
 
 from django_filters.rest_framework import DjangoFilterBackend

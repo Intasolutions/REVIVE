@@ -22,13 +22,15 @@ class UserProfileView(generics.RetrieveUpdateAPIView):
         return self.request.user
 
 
+from core.permissions import IsAdminRole
+
 class UserViewSet(viewsets.ModelViewSet):
     """
     CRUD for Admins to manage all hospital staff.
     """
     queryset = User.objects.all().order_by('-date_joined')
     serializer_class = UserSerializer
-    permission_classes = [permissions.IsAdminUser]
+    permission_classes = [IsAdminRole]
     filter_backends = [filters.SearchFilter]
     search_fields = ['username', 'email', 'role']
 
