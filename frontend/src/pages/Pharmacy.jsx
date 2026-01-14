@@ -5,7 +5,7 @@ import {
     Activity, User, Trash2, Printer, X, CheckCircle2,
     MapPin, Phone, Eye, Calendar, ChevronDown, ListFilter, Clock, Receipt, UploadCloud, FileText
 } from 'lucide-react';
-import { Card, Button, Input, Table } from '../components/UI'; // Assuming you have these base components
+import { Card, Button, Input, Table } from '../components/UI';
 import Pagination from '../components/Pagination';
 import api from '../api/axios';
 import { useSearch } from '../context/SearchContext';
@@ -89,7 +89,6 @@ const Pharmacy = () => {
     const [showPrintModal, setShowPrintModal] = useState(false);
     const [pendingVisits, setPendingVisits] = useState([]);
 
-
     // Uploads & Purchases
     const [selectedImport, setSelectedImport] = useState(null);
     const [recentImports, setRecentImports] = useState([]);
@@ -109,7 +108,6 @@ const Pharmacy = () => {
         if (activeTab === 'pos') fetchPendingVisits();
     }, [activeTab, page, globalSearch, rowsPerPage, filterSupplier]);
 
-
     // --- API CALLS ---
     const fetchSuppliers = async () => {
         try { const { data } = await api.get('pharmacy/suppliers/'); setSuppliers(data.results || data); } catch (err) { console.error(err); }
@@ -128,7 +126,6 @@ const Pharmacy = () => {
         finally { setLoading(false); }
     };
 
-
     const fetchRecentImports = async () => {
         try { const { data } = await api.get('pharmacy/purchases/'); setRecentImports(data.results || data); } catch (err) { console.error(err); }
     };
@@ -139,7 +136,6 @@ const Pharmacy = () => {
             setPendingVisits(data.results || data || []);
         } catch (err) { console.error("Failed to fetch pharmacy queue", err); }
     };
-
 
     // --- POS Logic ---
     const searchPatients = async (q) => {
@@ -155,12 +151,8 @@ const Pharmacy = () => {
     const searchMeds = async (q) => {
         setMedSearch(q);
         if (!q || q.length < 2) { setMedResults([]); return; }
-        try {
-            const { data } = await api.get(`pharmacy/stock/?search=${q}`);
-            setMedResults(data.results || data || []);
-        } catch (err) { setMedResults([]); }
+        try { const { data } = await api.get(`pharmacy/stock/?search=${q}`); setMedResults(data.results || data); } catch (err) { }
     };
-
 
     const addToCart = (med) => {
         const existing = cart.find(item => item.med_id === med.med_id);
@@ -206,10 +198,10 @@ const Pharmacy = () => {
             const { data } = await api.post('pharmacy/sales/', payload);
             setLastSale({ ...data, patient: selectedPatient, doctor: selectedDoctor, details: cart });
 
-            // If this was a prescription visit, close it
+            // Close visit if prescription based
             if (selectedPatient?.v_id) {
                 await api.patch(`reception/visits/${selectedPatient.v_id}/`, { status: 'CLOSED' });
-                fetchPendingVisits(); // Refresh queue
+                fetchPendingVisits();
             }
 
             setShowPrintModal(true);
@@ -220,9 +212,9 @@ const Pharmacy = () => {
         } catch (err) { showToast('error', "Checkout failed."); }
     };
 
+    // --- Load Prescription Logic ---
     const loadPrescription = async (visit) => {
         setSelectedPatient({ ...visit.patient, full_name: visit.patient_name, v_id: visit.id });
-        // Try to infer doctor name (it might be null in visit if referred, but we show what we have)
         if (visit.doctor_name) setSelectedDoctor({ username: visit.doctor_name, u_id: visit.doctor });
         else setSelectedDoctor({ username: 'Referral', u_id: null });
 
@@ -231,55 +223,37 @@ const Pharmacy = () => {
             return;
         }
 
-        // Auto-fill cart based on prescription matching
-        // Prescription format: { "DrugName": "Dosage | Duration | Qty: 5" }
         setLoading(true);
         const newCart = [];
         const notFound = [];
 
         try {
-            // We need to search for each item. This is heavy, maybe optimize later?
-            // For now, let's try to match by name from a quick search or pre-fetched stock? 
-            // Better: Searching one by one is slow. 
-            // Solution: We'll exact match against loaded stock if possible, otherwise just warn user.
-            // Actually, we can't search well without API. 
-            // Let's iterate keys and call search API for each? 
-            // Limited number of meds usually.
-
             const medNames = Object.keys(visit.prescription);
             for (const name of medNames) {
                 const details = visit.prescription[name];
-                // details string ex: "1-0-1 | 5 Days | Qty: 10"
-                // Extract Qty
                 let qty = 1;
                 const qtyMatch = details.match(/Qty:\s*(\d+)/i);
                 if (qtyMatch) qty = parseInt(qtyMatch[1]);
 
-                // Search strictly
                 const { data } = await api.get(`pharmacy/stock/?search=${encodeURIComponent(name)}`);
                 const results = data.results || data || [];
                 const match = results.find(r => r.name.toLowerCase() === name.toLowerCase()) || results[0];
 
                 if (match) {
-                    // Check if already in cart (unlikely since we just started)
                     newCart.push({ ...match, qty: qty });
                 } else {
                     notFound.push(name);
                 }
             }
-
             setCart(newCart);
-            if (notFound.length > 0) showToast('warning', `Could not find stock for: ${notFound.join(', ')}`);
-            if (newCart.length > 0) showToast('success', 'Prescription loaded into cart');
-
+            if (notFound.length > 0) showToast('warning', `Stock missing: ${notFound.join(', ')}`);
+            if (newCart.length > 0) showToast('success', 'Rx loaded');
         } catch (err) {
             console.error(err);
-            showToast('error', 'Error loading prescription items');
         } finally {
             setLoading(false);
         }
     };
-
 
     // --- Bulk Upload Logic ---
     const handleFileChange = (e) => {
@@ -310,13 +284,6 @@ const Pharmacy = () => {
 
     const handleAddSupplier = async (e) => {
         e.preventDefault();
-        const normalizedName = newSupplierName.trim().toLowerCase();
-
-        if (suppliers.some(s => s.supplier_name.toLowerCase() === normalizedName)) {
-            showToast('error', 'Supplier already exists!');
-            return;
-        }
-
         try {
             await api.post('pharmacy/suppliers/', { supplier_name: newSupplierName });
             fetchSuppliers();
@@ -378,7 +345,6 @@ const Pharmacy = () => {
                                     {(stockData?.results || []).map(s => (
                                         <tr key={s.med_id} className="hover:bg-slate-50 transition-colors group">
                                             <td className="px-6 py-3">
-
                                                 <div className="flex items-center gap-3">
                                                     <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold"><Pill size={14} /></div>
                                                     <div>
@@ -422,211 +388,175 @@ const Pharmacy = () => {
                     </>
                 )}
 
-                {/* 2. POS TAB */}
+                {/* 2. POS TAB - FIXED ALIGNMENT */}
                 {activeTab === 'pos' && (
                     <div className="flex h-full divide-x divide-slate-100">
-                        {/* LEFT: Action Center + Queue (65%) */}
-                        <div className="w-[65%] flex">
 
-                            {/* Queue Sidebar (25% of left = ~16% total) */}
-                            <div className="w-[30%] bg-slate-50 border-r border-slate-100 flex flex-col">
-                                <div className="p-4 border-b border-slate-100">
-                                    <h3 className="font-black text-slate-700 uppercase tracking-wider text-xs flex items-center gap-2">
-                                        <Clock size={14} /> Pending Rx
-                                    </h3>
-                                </div>
-                                <div className="flex-1 overflow-y-auto p-2 space-y-2">
-                                    {pendingVisits.length === 0 ? (
-                                        <div className="text-center py-10 opacity-50">
-                                            <p className="text-[10px] uppercase font-bold text-slate-400">No Pending Rx</p>
-                                        </div>
-                                    ) : (
-                                        pendingVisits.map(v => (
-                                            <div
-                                                key={v.id}
-                                                onClick={() => loadPrescription(v)}
-                                                className="p-3 bg-white border border-slate-200 rounded-xl cursor-pointer hover:border-blue-400 hover:shadow-md transition-all group"
-                                            >
-                                                <div className="flex justify-between items-start mb-1">
-                                                    <h4 className="font-bold text-sm text-slate-900 line-clamp-1">{v.patient_name}</h4>
-                                                    <span className="text-[9px] font-black bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded uppercase self-start">New</span>
-                                                </div>
-                                                <p className="text-[10px] text-slate-500 mb-2 truncate">Dr. {v.doctor_name || 'Referral'}</p>
-                                                <div className="flex items-center gap-1 text-[10px] text-slate-400">
-                                                    <Calendar size={10} /> {new Date(v.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                                </div>
-                                            </div>
-                                        ))
-                                    )}
-                                </div>
-                            </div>
+                        {/* --- LEFT SIDE: Action Center + Pending Queue (65%) --- */}
+                        <div className="w-[65%] flex flex-col bg-[#F8FAFC]">
 
-                            {/* Search & Actions (Remaining of LEFT) */}
-                            <div className="flex-1 flex flex-col bg-[#F8FAFC]">
-                                <div className="p-6 bg-white border-b border-slate-100 space-y-4">
-                                    <div className="flex gap-4">
-                                        {/* Patient Select */}
-                                        <div className="flex-1 relative group">
-                                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500"><User size={16} /></div>
-                                            <input
-                                                className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none"
-                                                placeholder="Search Patient (Name/Phone)..."
-                                                value={selectedPatient ? selectedPatient.full_name : patientSearch}
-                                                onChange={e => { setSelectedPatient(null); searchPatients(e.target.value); }}
-                                            />
-                                            {patients.length > 0 && !selectedPatient && (
-                                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-100 rounded-xl shadow-xl z-20 overflow-hidden max-h-48 overflow-y-auto">
-                                                    {patients.map(p => (
-                                                        <div key={p.p_id} onClick={() => { setSelectedPatient(p); setPatients([]); setPatientSearch(''); }} className="px-4 py-3 hover:bg-slate-50 cursor-pointer text-sm font-bold text-slate-700 border-b border-slate-50 last:border-0">
-                                                            {p.full_name} <span className="text-slate-400 font-normal">({p.phone})</span>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
-                                            {selectedPatient && <X className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer hover:text-red-500" size={14} onClick={() => { setSelectedPatient(null); setPatientSearch(''); }} />}
-                                        </div>
-                                        {/* Doctor Select */}
-                                        <div className="flex-1 relative group">
-                                            <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 group-focus-within:text-blue-500"><Activity size={16} /></div>
-                                            <input
-                                                className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none"
-                                                placeholder="Assign Doctor..."
-                                                value={selectedDoctor ? selectedDoctor.username : doctorSearch}
-                                                onChange={e => { setSelectedDoctor(null); searchDoctors(e.target.value); }}
-                                            />
-                                            {doctors.length > 0 && !selectedDoctor && (
-                                                <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-100 rounded-xl shadow-xl z-20 overflow-hidden max-h-48 overflow-y-auto">
-                                                    {doctors.map(d => (
-                                                        <div key={d.u_id} onClick={() => { setSelectedDoctor(d); setDoctors([]); setDoctorSearch(''); }} className="px-4 py-3 hover:bg-slate-50 cursor-pointer text-sm font-bold text-slate-700 border-b border-slate-50 last:border-0">
-                                                            Dr. {d.username}
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
-                                            {selectedDoctor && <X className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer hover:text-red-500" size={14} onClick={() => { setSelectedDoctor(null); setDoctorSearch(''); }} />}
-                                        </div>
+                            {/* Top Bar: Search & Queue */}
+                            <div className="flex h-1/3 border-b border-slate-200">
+                                {/* Pending Queue Sidebar */}
+                                <div className="w-1/3 border-r border-slate-100 bg-white flex flex-col">
+                                    <div className="p-3 border-b border-slate-100 bg-slate-50/50">
+                                        <h3 className="font-black text-slate-600 uppercase tracking-wider text-[10px] flex items-center gap-2">
+                                            <Clock size={12} /> Pending Rx Queue
+                                        </h3>
                                     </div>
-                                </div>
-
-                                {/* Main Product Search */}
-                                <div className="p-6 flex-1 overflow-hidden flex flex-col">
-                                    <div className="relative mb-6">
-                                        <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-                                        <input
-                                            className="w-full pl-12 pr-4 py-4 bg-white border-2 border-blue-100 rounded-2xl text-lg font-medium text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none shadow-sm"
-                                            placeholder="Scan barcode or type medicine name..."
-                                            value={medSearch}
-                                            onChange={e => searchMeds(e.target.value)}
-                                            autoFocus
-                                        />
-                                    </div>
-
-                                    {/* Results Grid */}
-                                    <div className="flex-1 overflow-y-auto">
-                                        {medResults.length > 0 ? (
-                                            <div className="grid grid-cols-2 gap-4 pb-20">
-                                                {medResults.map(m => (
-                                                    <div
-                                                        key={m.med_id}
-                                                        onClick={() => addToCart(m)}
-                                                        className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:border-blue-200 cursor-pointer transition-all group flex flex-col justify-between h-32"
-                                                    >
-                                                        <div className="flex justify-between items-start">
-                                                            <div>
-                                                                <h4 className="font-bold text-slate-900 line-clamp-1">{m.name}</h4>
-                                                                <p className="text-[10px] font-bold text-slate-400 uppercase mt-1">{m.manufacturer}</p>
-                                                            </div>
-                                                            <div className="w-8 h-8 rounded-lg bg-slate-50 text-slate-400 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-colors">
-                                                                <Plus size={16} />
-                                                            </div>
-                                                        </div>
-                                                        <div className="flex justify-between items-end">
-                                                            <div className={`text-xs font-bold px-2 py-1 rounded-md ${m.qty_available < 10 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
-                                                                Stock: {m.qty_available}
-                                                            </div>
-                                                            <p className="text-xl font-black text-slate-900">₹{m.selling_price}</p>
-                                                        </div>
-                                                    </div>
-                                                ))}
-                                            </div>
+                                    <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                                        {pendingVisits.length === 0 ? (
+                                            <div className="h-full flex items-center justify-center text-slate-300 text-xs font-bold uppercase">No Pending Rx</div>
                                         ) : (
-                                            <div className="h-full flex flex-col items-center justify-center text-slate-300">
-                                                <Search size={48} className="mb-4 opacity-50" />
-                                                <p className="font-bold text-sm">Start typing to search inventory...</p>
-                                            </div>
+                                            pendingVisits.map(v => (
+                                                <div key={v.id} onClick={() => loadPrescription(v)} className="p-3 bg-white border border-slate-100 rounded-lg cursor-pointer hover:border-blue-400 hover:shadow-md transition-all group">
+                                                    <div className="flex justify-between items-start">
+                                                        <h4 className="font-bold text-xs text-slate-900 line-clamp-1">{v.patient_name}</h4>
+                                                        {v.prescription && Object.keys(v.prescription).length > 0 ? (
+                                                            <span className="text-[8px] font-black bg-purple-50 text-purple-600 px-1 py-0.5 rounded uppercase">{Object.keys(v.prescription).length} Meds</span>
+                                                        ) : (
+                                                            <span className="text-[8px] font-black bg-blue-50 text-blue-600 px-1 py-0.5 rounded uppercase">New</span>
+                                                        )}
+                                                    </div>
+                                                    <p className="text-[9px] text-slate-400 truncate mt-1">Dr. {v.doctor_name || 'Ref'}</p>
+                                                </div>
+                                            ))
                                         )}
                                     </div>
                                 </div>
+
+                                {/* Patient/Doctor Inputs */}
+                                <div className="flex-1 p-6 bg-white space-y-4">
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="space-y-1 relative">
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Patient</label>
+                                            <div className="relative group">
+                                                <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                                                <input
+                                                    className="w-full pl-9 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:bg-white focus:border-blue-500 outline-none transition-all"
+                                                    placeholder="Search Patient..."
+                                                    value={selectedPatient ? selectedPatient.full_name : patientSearch}
+                                                    onChange={e => { setSelectedPatient(null); searchPatients(e.target.value); }}
+                                                />
+                                                {selectedPatient && <X className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer hover:text-red-500" size={14} onClick={() => { setSelectedPatient(null); setPatientSearch(''); }} />}
+                                                {/* Patient Dropdown */}
+                                                {patients.length > 0 && !selectedPatient && (
+                                                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-100 rounded-xl shadow-xl z-20 overflow-hidden max-h-40 overflow-y-auto">
+                                                        {patients.map(p => (
+                                                            <div key={p.p_id} onClick={() => { setSelectedPatient(p); setPatients([]); setPatientSearch(''); }} className="px-4 py-2 hover:bg-slate-50 cursor-pointer text-xs font-bold text-slate-700 border-b border-slate-50 last:border-0">
+                                                                {p.full_name} <span className="text-slate-400 font-normal">({p.phone})</span>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+
+                                        <div className="space-y-1 relative">
+                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Doctor</label>
+                                            <div className="relative group">
+                                                <Activity className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                                                <input
+                                                    className="w-full pl-9 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:bg-white focus:border-blue-500 outline-none transition-all"
+                                                    placeholder="Assign Doctor..."
+                                                    value={selectedDoctor ? selectedDoctor.username : doctorSearch}
+                                                    onChange={e => { setSelectedDoctor(null); searchDoctors(e.target.value); }}
+                                                />
+                                                {selectedDoctor && <X className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer hover:text-red-500" size={14} onClick={() => { setSelectedDoctor(null); setDoctorSearch(''); }} />}
+                                                {/* Doctor Dropdown */}
+                                                {doctors.length > 0 && !selectedDoctor && (
+                                                    <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-100 rounded-xl shadow-xl z-20 overflow-hidden max-h-40 overflow-y-auto">
+                                                        {doctors.map(d => (
+                                                            <div key={d.u_id} onClick={() => { setSelectedDoctor(d); setDoctors([]); setDoctorSearch(''); }} className="px-4 py-2 hover:bg-slate-50 cursor-pointer text-xs font-bold text-slate-700 border-b border-slate-50 last:border-0">
+                                                                Dr. {d.username}
+                                                            </div>
+                                                        ))}
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
 
-                            {/* RIGHT: The Bill / Invoice (35%) */}
-                            <div className="w-[35%] bg-white flex flex-col shadow-[-10px_0_40px_-15px_rgba(0,0,0,0.05)] z-20">
-                                <div className="p-6 border-b border-slate-100 bg-slate-50">
-                                    <div className="flex justify-between items-center mb-4">
-                                        <h2 className="text-sm font-black text-slate-900 uppercase tracking-widest flex items-center gap-2">
-                                            <ShoppingCart size={16} className="text-blue-600" /> Current Bill
-                                        </h2>
-                                        <span className="text-xs font-bold text-slate-400">{new Date().toLocaleDateString()}</span>
-                                    </div>
-                                    {selectedPatient ? (
-                                        <div className="p-3 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
-                                            <div>
-                                                <p className="text-[10px] text-slate-400 font-bold uppercase">Billed To</p>
-                                                <p className="text-sm font-bold text-slate-900">{selectedPatient.full_name}</p>
-                                            </div>
-                                            <button onClick={() => setSelectedPatient(null)} className="text-slate-400 hover:text-red-500"><X size={16} /></button>
+                            {/* Bottom: Product Search & Grid */}
+                            <div className="flex-1 flex flex-col overflow-hidden p-6">
+                                <div className="relative mb-6 shrink-0">
+                                    <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                                    <input
+                                        className="w-full pl-12 pr-4 py-4 bg-white border-2 border-blue-100 rounded-2xl text-lg font-medium text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none shadow-sm"
+                                        placeholder="Scan barcode or type medicine name..."
+                                        value={medSearch}
+                                        onChange={e => searchMeds(e.target.value)}
+                                        autoFocus
+                                    />
+                                </div>
+                                <div className="flex-1 overflow-y-auto">
+                                    {medResults.length > 0 ? (
+                                        <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 pb-20">
+                                            {medResults.map(m => (
+                                                <div key={m.med_id} onClick={() => addToCart(m)} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md hover:border-blue-200 cursor-pointer transition-all group flex flex-col justify-between h-32">
+                                                    <div className="flex justify-between items-start">
+                                                        <div><h4 className="font-bold text-slate-900 line-clamp-1 text-sm">{m.name}</h4><p className="text-[10px] font-bold text-slate-400 uppercase mt-1">{m.manufacturer}</p></div>
+                                                        <div className="w-6 h-6 rounded-lg bg-slate-50 text-slate-400 flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-colors"><Plus size={14} /></div>
+                                                    </div>
+                                                    <div className="flex justify-between items-end">
+                                                        <div className={`text-[10px] font-bold px-2 py-0.5 rounded-md ${m.qty_available < 10 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>Stock: {m.qty_available}</div>
+                                                        <p className="text-lg font-black text-slate-900">₹{m.selling_price}</p>
+                                                    </div>
+                                                </div>
+                                            ))}
                                         </div>
                                     ) : (
-                                        <div className="p-3 bg-yellow-50 border border-yellow-100 rounded-xl text-xs font-bold text-yellow-700 text-center">
-                                            Walk-In Customer (No Name)
+                                        <div className="h-full flex flex-col items-center justify-center text-slate-300">
+                                            <Search size={48} className="mb-4 opacity-50" />
+                                            <p className="font-bold text-sm">Start typing to search inventory...</p>
                                         </div>
                                     )}
                                 </div>
+                            </div>
+                        </div>
 
-                                <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-white">
-                                    {cart.length === 0 ? (
-                                        <div className="flex flex-col items-center justify-center h-48 opacity-40">
-                                            <ShoppingCart size={40} className="mb-2" />
-                                            <p className="text-xs font-bold uppercase">Empty Cart</p>
-                                        </div>
-                                    ) : cart.map((item, idx) => (
-                                        <div key={idx} className="flex justify-between items-center p-3 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors">
-                                            <div className="flex-1">
-                                                <p className="text-sm font-bold text-slate-900 line-clamp-1">{item.name}</p>
-                                                <p className="text-[10px] text-slate-400 font-mono">₹{item.selling_price} x {item.qty}</p>
-                                            </div>
-                                            <div className="flex items-center gap-3">
-                                                <p className="text-sm font-black text-slate-900">₹{(item.selling_price * item.qty).toFixed(2)}</p>
-                                                <button onClick={() => {
-                                                    const newCart = cart.filter(c => c.med_id !== item.med_id);
-                                                    setCart(newCart);
-                                                }} className="text-slate-300 hover:text-red-500 transition-colors">
-                                                    <Trash2 size={14} />
-                                                </button>
-                                            </div>
-                                        </div>
-                                    ))}
+                        {/* --- RIGHT SIDE: Cart & Billing (35%) --- */}
+                        <div className="w-[35%] bg-white flex flex-col shadow-[-10px_0_40px_-15px_rgba(0,0,0,0.05)] z-20">
+                            <div className="p-6 border-b border-slate-100 bg-slate-50 shrink-0">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h2 className="text-sm font-black text-slate-900 uppercase tracking-widest flex items-center gap-2"><ShoppingCart size={16} className="text-blue-600" /> Current Bill</h2>
+                                    <span className="text-xs font-bold text-slate-400">{new Date().toLocaleDateString()}</span>
                                 </div>
+                                {selectedPatient ? (
+                                    <div className="p-3 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
+                                        <div><p className="text-[10px] text-slate-400 font-bold uppercase">Billed To</p><p className="text-sm font-bold text-slate-900">{selectedPatient.full_name}</p></div>
+                                        <button onClick={() => setSelectedPatient(null)} className="text-slate-400 hover:text-red-500"><X size={16} /></button>
+                                    </div>
+                                ) : <div className="p-3 bg-yellow-50 border border-yellow-100 rounded-xl text-xs font-bold text-yellow-700 text-center">Walk-In Customer (No Name)</div>}
+                            </div>
 
-                                <div className="p-6 bg-slate-50 border-t border-slate-100 space-y-4">
-                                    <div className="space-y-2">
-                                        <div className="border-t border-dashed border-slate-300 pt-2 flex justify-between items-end">
-                                            <span className="text-xs font-black text-slate-900 uppercase tracking-wider">Net Payable</span>
-                                            <span className="text-3xl font-black text-slate-900 leading-none">₹{calculateTotals().net.toFixed(2)}</span>
+                            <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-white">
+                                {cart.length === 0 ? (
+                                    <div className="flex flex-col items-center justify-center h-full opacity-40"><ShoppingCart size={40} className="mb-2" /><p className="text-xs font-bold uppercase">Empty Cart</p></div>
+                                ) : cart.map((item, idx) => (
+                                    <div key={idx} className="flex justify-between items-center p-3 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors">
+                                        <div className="flex-1"><p className="text-sm font-bold text-slate-900 line-clamp-1">{item.name}</p><p className="text-[10px] text-slate-400 font-mono">₹{item.selling_price} x {item.qty}</p></div>
+                                        <div className="flex items-center gap-3">
+                                            <p className="text-sm font-black text-slate-900">₹{(item.selling_price * item.qty).toFixed(2)}</p>
+                                            <button onClick={() => { const newCart = cart.filter(c => c.med_id !== item.med_id); setCart(newCart); }} className="text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
                                         </div>
                                     </div>
-                                    <button
-                                        onClick={handleCheckout}
-                                        disabled={cart.length === 0}
-                                        className="w-full py-4 bg-slate-900 hover:bg-blue-600 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-2xl font-bold shadow-lg shadow-slate-900/10 transition-all active:scale-[0.98] flex items-center justify-center gap-2 uppercase tracking-widest text-xs"
-                                    >
-                                        <Printer size={16} /> Print & Checkout
-                                    </button>
+                                ))}
+                            </div>
+
+                            <div className="p-6 bg-slate-50 border-t border-slate-100 space-y-4 shrink-0">
+                                <div className="space-y-2">
+                                    <div className="border-t border-dashed border-slate-300 pt-2 flex justify-between items-end"><span className="text-xs font-black text-slate-900 uppercase tracking-wider">Net Payable</span><span className="text-3xl font-black text-slate-900 leading-none">₹{calculateTotals().net.toFixed(2)}</span></div>
                                 </div>
+                                <button onClick={handleCheckout} disabled={cart.length === 0} className="w-full py-4 bg-slate-900 hover:bg-blue-600 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-2xl font-bold shadow-lg shadow-slate-900/10 transition-all active:scale-[0.98] flex items-center justify-center gap-2 uppercase tracking-widest text-xs"><Printer size={16} /> Print & Checkout</button>
                             </div>
                         </div>
                     </div>
                 )}
+
+                {/* 3. PURCHASES TAB (Fully Working & Aligned) */}
                 {activeTab === 'purchases' && (
                     <div className="flex h-full divide-x divide-slate-100">
                         {/* Left: Upload Station (35%) */}
@@ -636,67 +566,33 @@ const Pharmacy = () => {
                                     <UploadCloud size={36} />
                                 </div>
                                 <h2 className="text-2xl font-black text-slate-900 mb-2">Import Inventory</h2>
-                                <p className="text-sm text-slate-500 font-medium mb-8">Select supplier and upload CSV invoice to auto-update stock.</p>
+                                <p className="text-sm text-slate-500 font-medium mb-8">Select supplier and upload CSV invoice.</p>
 
                                 <div className="space-y-4">
                                     <div className="relative text-left">
                                         <div className="flex justify-between items-end mb-1">
                                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">1. Select Supplier</label>
-                                            {/* ADDED: Add Supplier Button */}
-                                            <button
-                                                onClick={() => setShowAddSupplierModal(true)}
-                                                className="text-[10px] font-bold text-blue-600 hover:underline flex items-center gap-1 uppercase tracking-wider"
-                                            >
-                                                <Plus size={10} /> Add New
-                                            </button>
+                                            <button onClick={() => setShowAddSupplierModal(true)} className="text-[10px] font-bold text-blue-600 hover:underline flex items-center gap-1 uppercase tracking-wider"><Plus size={10} /> Add New</button>
                                         </div>
-                                        <select
-                                            className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-blue-500"
-                                            value={selectedSupplier}
-                                            onChange={(e) => setSelectedSupplier(e.target.value)}
-                                        >
+                                        <select className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-blue-500" value={selectedSupplier} onChange={(e) => setSelectedSupplier(e.target.value)}>
                                             <option value="">Select a Supplier...</option>
                                             {suppliers.map(s => <option key={s.id} value={s.supplier_name}>{s.supplier_name}</option>)}
                                         </select>
                                     </div>
-
                                     <div className="relative text-left">
                                         <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 mb-1 block">2. Upload File</label>
                                         <label className={`flex flex-col items-center justify-center h-32 border-2 border-dashed rounded-2xl cursor-pointer transition-all ${fileToUpload ? 'border-blue-500 bg-blue-50' : 'border-slate-200 hover:border-blue-300 hover:bg-white'}`}>
                                             <input type="file" className="hidden" accept=".csv" onChange={handleFileChange} disabled={!selectedSupplier} />
-                                            {fileToUpload ? (
-                                                <div className="text-center">
-                                                    <FileText size={24} className="text-blue-500 mx-auto mb-2" />
-                                                    <p className="text-xs font-bold text-blue-700 break-all px-4">{fileToUpload.name}</p>
-                                                </div>
-                                            ) : (
-                                                <div className="text-center text-slate-400">
-                                                    <Plus size={24} className="mx-auto mb-2" />
-                                                    <p className="text-xs font-bold">Click to Browse CSV</p>
-                                                </div>
-                                            )}
+                                            {fileToUpload ? (<div className="text-center"><FileText size={24} className="text-blue-500 mx-auto mb-2" /><p className="text-xs font-bold text-blue-700 break-all px-4">{fileToUpload.name}</p></div>) : (<div className="text-center text-slate-400"><Plus size={24} className="mx-auto mb-2" /><p className="text-xs font-bold">Click to Browse CSV</p></div>)}
                                         </label>
                                     </div>
-
-                                    <button
-                                        onClick={handleConfirmUpload}
-                                        disabled={!fileToUpload || uploadLoading}
-                                        className="w-full py-4 bg-slate-900 text-white rounded-xl font-bold shadow-lg shadow-slate-900/20 hover:bg-blue-600 disabled:bg-slate-200 disabled:text-slate-400 transition-all"
-                                    >
-                                        {uploadLoading ? 'Processing...' : 'Confirm Upload'}
-                                    </button>
+                                    <button onClick={handleConfirmUpload} disabled={!fileToUpload || uploadLoading} className="w-full py-4 bg-slate-900 text-white rounded-xl font-bold shadow-lg shadow-slate-900/20 hover:bg-blue-600 disabled:bg-slate-200 disabled:text-slate-400 transition-all">{uploadLoading ? 'Processing...' : 'Confirm Upload'}</button>
                                 </div>
                             </div>
-
-                            {/* Upload Status Card */}
                             {uploadResult && (
                                 <div className={`mt-6 p-4 rounded-2xl border-2 text-sm font-bold flex items-start gap-3 shadow-sm ${uploadResult.success ? 'bg-emerald-50 border-emerald-100 text-emerald-700' : 'bg-rose-50 border-rose-100 text-rose-700'}`}>
                                     <div className="mt-0.5">{uploadResult.success ? <CheckCircle2 size={18} /> : <AlertTriangle size={18} />}</div>
-                                    <div>
-                                        <p className="uppercase tracking-wide text-xs mb-1">{uploadResult.message}</p>
-                                        <p className="opacity-80 font-normal">{uploadResult.details}</p>
-                                        {uploadResult.invoice && <p className="mt-2 pt-2 border-t border-emerald-200 text-xs uppercase tracking-widest">Invoice: {uploadResult.invoice}</p>}
-                                    </div>
+                                    <div><p className="uppercase tracking-wide text-xs mb-1">{uploadResult.message}</p><p className="opacity-80 font-normal">{uploadResult.details}</p></div>
                                 </div>
                             )}
                         </div>
@@ -704,32 +600,21 @@ const Pharmacy = () => {
                         {/* Right: History (65%) */}
                         <div className="w-[65%] flex flex-col bg-white">
                             <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-                                <h3 className="font-bold text-slate-900 flex items-center gap-2">
-                                    <Clock size={18} className="text-slate-400" /> Recent Imports history
-                                </h3>
+                                <h3 className="font-bold text-slate-900 flex items-center gap-2"><Clock size={18} className="text-slate-400" /> Recent Imports history</h3>
                             </div>
                             <div className="flex-1 overflow-auto">
                                 <table className="w-full text-left border-collapse">
                                     <thead className="bg-slate-50 sticky top-0 shadow-sm">
-                                        <tr>
-                                            {['Supplier', 'Date', 'Items', 'Action'].map(h => (
-                                                <th key={h} className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">{h}</th>
-                                            ))}
-                                        </tr>
+                                        <tr>{['Invoice #', 'Supplier', 'Date', 'Items', 'Action'].map(h => <th key={h} className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">{h}</th>)}</tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-50">
                                         {recentImports.map(imp => (
                                             <tr key={imp.id} className="hover:bg-slate-50 transition-colors">
+                                                <td className="px-6 py-4 font-bold text-slate-900">{imp.invoice_no}</td>
                                                 <td className="px-6 py-4 text-sm font-medium text-slate-600">{suppliers.find(s => s.id === imp.supplier)?.supplier_name || 'N/A'}</td>
                                                 <td className="px-6 py-4 font-mono text-xs text-slate-500">{new Date(imp.created_at).toLocaleDateString()}</td>
-                                                <td className="px-6 py-4">
-                                                    <span className="inline-flex items-center px-2.5 py-1 rounded-md bg-slate-100 text-slate-600 text-xs font-bold">
-                                                        {imp.items_detail ? imp.items_detail.length : (imp.items ? imp.items.length : 0)}
-                                                    </span>
-                                                </td>
-                                                <td className="px-6 py-4">
-                                                    <button onClick={() => setSelectedImport(imp)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"><Eye size={18} /></button>
-                                                </td>
+                                                <td className="px-6 py-4"><span className="inline-flex items-center px-2.5 py-1 rounded-md bg-slate-100 text-slate-600 text-xs font-bold">{imp.items_detail ? imp.items_detail.length : (imp.items ? imp.items.length : 0)}</span></td>
+                                                <td className="px-6 py-4"><button onClick={() => setSelectedImport(imp)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"><Eye size={18} /></button></td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -740,35 +625,22 @@ const Pharmacy = () => {
                 )}
             </div>
 
-            {/* --- Modals (Stock Details, Print, Import Details, Add Supplier) --- */}
-
-            {/* View Stock Details Modal */}
+            {/* --- Modals (Keep existing modals for Stock Details, Print, Import, Add Supplier) --- */}
+            {/* ... (Existing Modals Code - View Stock, Print, Import, Add Supplier) ... */}
             <AnimatePresence>
                 {selectedStockItem && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-6 no-print">
                         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setSelectedStockItem(null)} />
                         <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }} className="bg-white w-full max-w-md rounded-[2rem] shadow-2xl relative z-10 p-8">
                             <div className="flex justify-between items-start mb-6">
-                                <div>
-                                    <h2 className="text-xl font-black text-slate-900">{selectedStockItem.name}</h2>
-                                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">{selectedStockItem.manufacturer}</p>
-                                </div>
+                                <div><h2 className="text-xl font-black text-slate-900">{selectedStockItem.name}</h2><p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">{selectedStockItem.manufacturer}</p></div>
                                 <button onClick={() => setSelectedStockItem(null)} className="p-2 bg-slate-50 rounded-full hover:bg-slate-100"><X size={18} /></button>
                             </div>
                             <div className="space-y-4">
-                                <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center">
-                                    <span className="text-xs font-bold text-slate-500 uppercase">Stock Available</span>
-                                    <span className="text-xl font-black text-emerald-600">{selectedStockItem.qty_available}</span>
-                                </div>
+                                <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center"><span className="text-xs font-bold text-slate-500 uppercase">Stock Available</span><span className="text-xl font-black text-emerald-600">{selectedStockItem.qty_available}</span></div>
                                 <div className="grid grid-cols-2 gap-4">
-                                    <div className="p-4 bg-white border border-slate-100 rounded-xl">
-                                        <p className="text-[10px] font-bold text-slate-400 uppercase">Batch No</p>
-                                        <p className="font-mono font-bold text-slate-900">{selectedStockItem.batch_no}</p>
-                                    </div>
-                                    <div className="p-4 bg-white border border-slate-100 rounded-xl">
-                                        <p className="text-[10px] font-bold text-slate-400 uppercase">Expiry</p>
-                                        <p className="font-mono font-bold text-slate-900">{new Date(selectedStockItem.expiry_date).toLocaleDateString()}</p>
-                                    </div>
+                                    <div className="p-4 bg-white border border-slate-100 rounded-xl"><p className="text-[10px] font-bold text-slate-400 uppercase">Batch No</p><p className="font-mono font-bold text-slate-900">{selectedStockItem.batch_no}</p></div>
+                                    <div className="p-4 bg-white border border-slate-100 rounded-xl"><p className="text-[10px] font-bold text-slate-400 uppercase">Expiry</p><p className="font-mono font-bold text-slate-900">{new Date(selectedStockItem.expiry_date).toLocaleDateString()}</p></div>
                                 </div>
                             </div>
                         </motion.div>
@@ -776,7 +648,6 @@ const Pharmacy = () => {
                 )}
             </AnimatePresence>
 
-            {/* Print Receipt Modal */}
             <AnimatePresence>
                 {showPrintModal && lastSale && (
                     <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 no-print">
@@ -784,20 +655,14 @@ const Pharmacy = () => {
                         <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white w-full max-w-lg rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col max-h-[90vh]">
                             <div className="p-4 bg-slate-900 text-white flex justify-between items-center shrink-0">
                                 <h3 className="font-bold text-sm ml-2">Print Receipt</h3>
-                                <div className="flex gap-2">
-                                    <button onClick={() => window.print()} className="p-2 bg-blue-600 rounded-lg hover:bg-blue-500"><Printer size={18} /></button>
-                                    <button onClick={() => setShowPrintModal(false)} className="p-2 bg-slate-800 rounded-lg hover:bg-slate-700"><X size={18} /></button>
-                                </div>
+                                <div className="flex gap-2"><button onClick={() => window.print()} className="p-2 bg-blue-600 rounded-lg hover:bg-blue-500"><Printer size={18} /></button><button onClick={() => setShowPrintModal(false)} className="p-2 bg-slate-800 rounded-lg hover:bg-slate-700"><X size={18} /></button></div>
                             </div>
-                            <div className="flex-1 overflow-y-auto bg-white" id="printable-area">
-                                <ReceiptTemplate sale={lastSale} />
-                            </div>
+                            <div className="flex-1 overflow-y-auto bg-white" id="printable-area"><ReceiptTemplate sale={lastSale} /></div>
                         </motion.div>
                     </div>
                 )}
             </AnimatePresence>
 
-            {/* View Import Modal - PREMIUM UPGRADE */}
             <AnimatePresence>
                 {selectedImport && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-6 no-print">
@@ -805,52 +670,21 @@ const Pharmacy = () => {
                         <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }} className="bg-white w-full max-w-4xl rounded-[2rem] shadow-2xl relative z-10 overflow-hidden flex flex-col max-h-[85vh]">
                             <div className="p-8 bg-slate-50 border-b border-slate-100">
                                 <div className="flex justify-between items-center mb-6">
-                                    <div>
-                                        <h2 className="text-2xl font-black text-slate-900">Invoice #{selectedImport.invoice_no || selectedImport.id?.slice(0, 8).toUpperCase() || '---'}</h2>
-                                        <p className="text-sm font-bold text-slate-400">Imported on {new Date(selectedImport.created_at).toLocaleDateString()}</p>
-                                    </div>
+                                    <div><h2 className="text-2xl font-black text-slate-900">Invoice #{selectedImport.invoice_no || '---'}</h2><p className="text-sm font-bold text-slate-400">Imported on {new Date(selectedImport.created_at).toLocaleDateString()}</p></div>
                                     <button onClick={() => setSelectedImport(null)} className="p-2 bg-white rounded-full hover:text-red-500 shadow-sm"><X size={20} /></button>
                                 </div>
                                 <div className="grid grid-cols-3 gap-4">
-                                    <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-sm">
-                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Value</p>
-                                        <p className="text-2xl font-black text-slate-900">₹{selectedImport.total_amount}</p>
-                                    </div>
-                                    <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-sm">
-                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Items Count</p>
-                                        <p className="text-2xl font-black text-emerald-600">{selectedImport.items_detail?.length || 0}</p>
-                                    </div>
-                                    <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-sm">
-                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Status</p>
-                                        <div className="flex items-center gap-2 mt-1">
-                                            <CheckCircle2 size={20} className="text-blue-500" />
-                                            <span className="text-lg font-bold text-slate-700">Verified</span>
-                                        </div>
-                                    </div>
+                                    <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-sm"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Value</p><p className="text-2xl font-black text-slate-900">₹{selectedImport.total_amount}</p></div>
+                                    <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-sm"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Items Count</p><p className="text-2xl font-black text-emerald-600">{selectedImport.items_detail?.length || 0}</p></div>
+                                    <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-sm"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Status</p><div className="flex items-center gap-2 mt-1"><CheckCircle2 size={20} className="text-blue-500" /><span className="text-lg font-bold text-slate-700">Verified</span></div></div>
                                 </div>
                             </div>
                             <div className="flex-1 overflow-auto p-0">
                                 <table className="w-full text-left border-collapse">
-                                    <thead className="bg-white sticky top-0 shadow-sm">
-                                        <tr>
-                                            {['Product', 'Batch', 'Exp', 'Qty', 'MRP', 'PTR', 'Amount'].map(h => (
-                                                <th key={h} className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50">{h}</th>
-                                            ))}
-                                        </tr>
-                                    </thead>
-                                    <tbody className="divide-y divide-slate-50">
-                                        {selectedImport.items_detail?.map((item, idx) => (
-                                            <tr key={idx} className="hover:bg-slate-50 transition-colors">
-                                                <td className="px-6 py-3 font-bold text-sm text-slate-900">{item.product_name}</td>
-                                                <td className="px-6 py-3 font-mono text-xs text-slate-600">{item.batch_no}</td>
-                                                <td className="px-6 py-3 font-mono text-xs text-slate-600">{item.expiry_date}</td>
-                                                <td className="px-6 py-3 font-bold text-emerald-600">{item.qty}</td>
-                                                <td className="px-6 py-3 text-sm text-slate-600">₹{item.mrp}</td>
-                                                <td className="px-6 py-3 text-sm text-slate-600">₹{item.ptr}</td>
-                                                <td className="px-6 py-3 font-black text-slate-900">₹{((item.ptr || 0) * item.qty).toFixed(2)}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
+                                    <thead className="bg-white sticky top-0 shadow-sm"><tr>{['Product', 'Batch', 'Exp', 'Qty', 'MRP', 'PTR', 'Amount'].map(h => <th key={h} className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50">{h}</th>)}</tr></thead>
+                                    <tbody className="divide-y divide-slate-50">{selectedImport.items_detail?.map((item, idx) => (
+                                        <tr key={idx} className="hover:bg-slate-50 transition-colors"><td className="px-6 py-3 font-bold text-sm text-slate-900">{item.product_name}</td><td className="px-6 py-3 font-mono text-xs text-slate-600">{item.batch_no}</td><td className="px-6 py-3 font-mono text-xs text-slate-600">{item.expiry_date}</td><td className="px-6 py-3 font-bold text-emerald-600">{item.qty}</td><td className="px-6 py-3 text-sm text-slate-600">₹{item.mrp}</td><td className="px-6 py-3 text-sm text-slate-600">₹{item.ptr}</td><td className="px-6 py-3 font-black text-slate-900">₹{((item.ptr || 0) * item.qty).toFixed(2)}</td></tr>
+                                    ))}</tbody>
                                 </table>
                             </div>
                         </motion.div>
@@ -858,19 +692,12 @@ const Pharmacy = () => {
                 )}
             </AnimatePresence>
 
-            {/* Add Supplier Modal */}
             <AnimatePresence>
                 {showAddSupplierModal && (
                     <div className="fixed inset-0 z-[60] flex items-center justify-center p-6 bg-slate-950/40 backdrop-blur-sm no-print">
                         <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-sm rounded-[2rem] shadow-2xl overflow-hidden p-8 space-y-6">
-                            <div className="flex justify-between items-center">
-                                <h3 className="font-black text-xl text-slate-900 uppercase tracking-wide">New Supplier</h3>
-                                <X className="cursor-pointer text-slate-400 hover:text-rose-500" onClick={() => setShowAddSupplierModal(false)} />
-                            </div>
-                            <form onSubmit={handleAddSupplier} className="space-y-4">
-                                <Input placeholder="Supplier Name" value={newSupplierName} onChange={e => setNewSupplierName(e.target.value)} required className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold" />
-                                <Button type="submit" className="w-full h-12 rounded-xl font-black uppercase tracking-widest text-sm shadow-xl shadow-sky-500/20">Create Supplier</Button>
-                            </form>
+                            <div className="flex justify-between items-center"><h3 className="font-black text-xl text-slate-900 uppercase tracking-wide">New Supplier</h3><X className="cursor-pointer text-slate-400 hover:text-rose-500" onClick={() => setShowAddSupplierModal(false)} /></div>
+                            <form onSubmit={handleAddSupplier} className="space-y-4"><Input placeholder="Supplier Name" value={newSupplierName} onChange={e => setNewSupplierName(e.target.value)} required className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold" /><Button type="submit" className="w-full h-12 rounded-xl font-black uppercase tracking-widest text-sm shadow-xl shadow-sky-500/20">Create Supplier</Button></form>
                         </motion.div>
                     </div>
                 )}

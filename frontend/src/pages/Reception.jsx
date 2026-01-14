@@ -94,7 +94,7 @@ const Reception = () => {
     const fetchPatients = async () => {
         setLoading(true);
         try {
-            const { data } = await api.get(`/reception/patients/?page=${page}${globalSearch ? `&search=${encodeURIComponent(globalSearch)}` : ''}`);
+            const { data } = await api.get(`/reception/patients/?page=${page}&exclude_active=true${globalSearch ? `&search=${encodeURIComponent(globalSearch)}` : ''}`);
             setPatientsData(data);
         } catch (err) {
             console.error(err);
@@ -610,7 +610,6 @@ const Reception = () => {
                                     >
                                         <option value="DOCTOR">Doctor (Consultation)</option>
                                         <option value="LAB">Laboratory</option>
-                                        <option value="PHARMACY">Pharmacy</option>
                                         <option value="CASUALTY">Casualty / Emergency</option>
                                     </select>
                                 </div>
@@ -650,11 +649,10 @@ const Reception = () => {
                                     <div className="flex-1 flex flex-col items-center justify-center text-center p-6 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
                                         <div className="w-16 h-16 bg-white rounded-full flex items-center justify-center mb-3 shadow-sm">
                                             {visitForm.assigned_role === 'LAB' && <Activity className="text-blue-500" size={32} />}
-                                            {visitForm.assigned_role === 'PHARMACY' && <Pill className="text-emerald-500" size={32} />}
                                             {visitForm.assigned_role === 'CASUALTY' && <AlertCircle className="text-red-500" size={32} />}
                                         </div>
                                         <h4 className="font-bold text-slate-900">
-                                            Assign to {visitForm.assigned_role === 'LAB' ? 'Laboratory' : visitForm.assigned_role === 'PHARMACY' ? 'Pharmacy' : 'Casualty'}
+                                            Assign to {visitForm.assigned_role === 'LAB' ? 'Laboratory' : 'Casualty'}
                                         </h4>
                                         <p className="text-xs text-slate-500 mt-1 max-w-[200px]">
                                             Patient will be added to the {visitForm.assigned_role.toLowerCase()} queue directly.

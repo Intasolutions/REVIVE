@@ -11,6 +11,7 @@ class DoctorNote(BaseModel):
     diagnosis = models.TextField()
     prescription = models.JSONField(default=dict, blank=True)
     notes = models.TextField(blank=True)
+    lab_referral_details = models.TextField(blank=True)
 
     def __str__(self):
         return f"Note for Visit {getattr(self.visit, 'id', self.visit.id)}"

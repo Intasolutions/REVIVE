@@ -47,6 +47,7 @@ const Doctor = () => {
     const [medResults, setMedResults] = useState([]);
     const [selectedMeds, setSelectedMeds] = useState([]);
     const [referral, setReferral] = useState('NONE'); // NONE, LAB, PHARMACY, CASUALTY
+    const [labDetails, setLabDetails] = useState('');
 
 
     // --- Effects ---
@@ -60,6 +61,7 @@ const Doctor = () => {
             setNotes({ diagnosis: '', prescription: {}, notes: '' });
             setSelectedMeds([]);
             setReferral('NONE');
+            setLabDetails('');
             fetchPatientHistory(selectedVisit.patient_id || selectedVisit.patient);
 
         } else {
@@ -146,7 +148,8 @@ const Doctor = () => {
             await api.post('/medical/doctor-notes/', {
                 visit: selectedVisit.v_id || selectedVisit.id,
                 ...notes,
-                prescription: prescriptionObj
+                prescription: prescriptionObj,
+                lab_referral_details: labDetails
             });
 
             const updatePayload = referral !== 'NONE'
@@ -306,6 +309,32 @@ const Doctor = () => {
                                                 onChange={(e) => setNotes({ ...notes, diagnosis: e.target.value })}
                                             />
                                         </div>
+
+                                        {/* Lab Referral Details Input (Conditional) */}
+                                        <AnimatePresence>
+                                            {referral === 'LAB' && (
+                                                <motion.div
+                                                    initial={{ opacity: 0, height: 0 }}
+                                                    animate={{ opacity: 1, height: 'auto' }}
+                                                    exit={{ opacity: 0, height: 0 }}
+                                                    className="overflow-hidden"
+                                                >
+                                                    <div className="group mt-6">
+                                                        <label className="flex items-center gap-2 text-sm font-bold text-slate-700 mb-3">
+                                                            <div className="p-1.5 bg-purple-100 rounded-lg text-purple-600"><ClipboardList size={16} /></div>
+                                                            Lab Test Requirements
+                                                        </label>
+                                                        <textarea
+                                                            className="w-full p-5 bg-purple-50/50 border-2 border-purple-100 rounded-2xl text-sm font-medium text-slate-800 focus:bg-white focus:border-purple-500 focus:ring-4 focus:ring-purple-500/10 outline-none transition-all resize-none placeholder:text-slate-400"
+                                                            rows="3"
+                                                            placeholder="Specify tests or checkups required..."
+                                                            value={labDetails}
+                                                            onChange={(e) => setLabDetails(e.target.value)}
+                                                        />
+                                                    </div>
+                                                </motion.div>
+                                            )}
+                                        </AnimatePresence>
 
                                         {/* Prescription Pad */}
                                         <div className="bg-slate-50/50 rounded-[24px] border border-slate-100 p-6 relative group focus-within:ring-4 focus-within:ring-blue-500/5 transition-all">

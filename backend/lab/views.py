@@ -3,6 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 
+from billing.models import Invoice, InvoiceItem
 from .models import LabInventory, LabCharge
 from .serializers import LabInventorySerializer, LabChargeSerializer
 
@@ -35,3 +36,35 @@ class LabChargeViewSet(viewsets.ModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     search_fields = ['test_name', 'visit__patient__full_name', 'visit__patient__phone']
     filterset_fields = ['visit', 'status']
+
+    def perform_update(self, serializer):
+        instance = serializer.save()
+        
+        # Trigger Billing if status matches COMPLETED
+        if instance.status == 'COMPLETED':
+            # 1. Get/Create Invoice for this Visit
+            # We look for a pending invoice for this visit, or create one.
+            invoice, created = Invoice.objects.get_or_create(
+                visit=instance.visit,
+                payment_status='PENDING',
+                defaults={
+                    'patient_name': instance.visit.patient.full_name if instance.visit.patient else 'Unknown',
+                    'total_amount': 0
+                }
+            )
+
+            # 2. Add Invoice Item
+            InvoiceItem.objects.create(
+                invoice=invoice,
+                dept='LAB',
+                description=instance.test_name,
+                qty=1,
+                unit_price=instance.amount,
+                amount=instance.amount
+            )
+
+            # 3. Update Invoice Total
+            # Recalculate total to be safe
+            total = sum(item.amount for item in invoice.items.all())
+            invoice.total_amount = total
+            invoice.save()
