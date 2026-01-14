@@ -12,6 +12,7 @@ import Users from './pages/Users';
 import Laboratory from './pages/Laboratory';
 import { SearchProvider } from './context/SearchContext';
 import { ToastProvider } from './context/ToastContext';
+import { DialogProvider } from './context/DialogContext';
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth();
@@ -23,25 +24,27 @@ const ProtectedRoute = ({ children }) => {
 function App() {
   return (
     <ToastProvider>
-    <AuthProvider>
-      <SearchProvider>
-        <BrowserRouter>
-          <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-            <Route path="/reception" element={<ProtectedRoute><Reception /></ProtectedRoute>} />
-            <Route path="/pharmacy" element={<ProtectedRoute><Pharmacy /></ProtectedRoute>} />
-            <Route path="/doctor" element={<ProtectedRoute><Doctor /></ProtectedRoute>} />
-            <Route path="/billing" element={<ProtectedRoute><Billing /></ProtectedRoute>} />
-            <Route path="/lab" element={<ProtectedRoute><Laboratory /></ProtectedRoute>} />
-            <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
-            <Route path="/users" element={<ProtectedRoute><Users /></ProtectedRoute>} />
-            {/* Default fallback */}
-            <Route path="*" element={<Navigate to="/" />} />
-          </Routes>
-        </BrowserRouter>
-      </SearchProvider>
-    </AuthProvider>
+      <DialogProvider>
+        <AuthProvider>
+          <SearchProvider>
+            <BrowserRouter>
+              <Routes>
+                <Route path="/login" element={<Login />} />
+                <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+                <Route path="/reception" element={<ProtectedRoute><Reception /></ProtectedRoute>} />
+                <Route path="/pharmacy" element={<ProtectedRoute><Pharmacy /></ProtectedRoute>} />
+                <Route path="/doctor" element={<ProtectedRoute><Doctor /></ProtectedRoute>} />
+                <Route path="/billing" element={<ProtectedRoute><Billing /></ProtectedRoute>} />
+                <Route path="/lab" element={<ProtectedRoute><Laboratory /></ProtectedRoute>} />
+                <Route path="/reports" element={<ProtectedRoute><Reports /></ProtectedRoute>} />
+                <Route path="/users" element={<ProtectedRoute><Users /></ProtectedRoute>} />
+                {/* Default fallback */}
+                <Route path="*" element={<Navigate to="/" />} />
+              </Routes>
+            </BrowserRouter>
+          </SearchProvider>
+        </AuthProvider>
+      </DialogProvider>
     </ToastProvider>
   );
 }

@@ -35,7 +35,7 @@ class UserViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'], permission_classes=[permissions.IsAuthenticated])
     def doctors(self, request):
         doctors = User.objects.filter(role='DOCTOR', is_active=True)
-        doctors = self.filter_queryset(doctors)
+        # doctors = self.filter_queryset(doctors)  <-- Removed to prevent unexpected filtering
         serializer = self.get_serializer(doctors, many=True)
         return Response(serializer.data)
 

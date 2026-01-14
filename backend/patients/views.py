@@ -17,6 +17,18 @@ class PatientViewSet(viewsets.ModelViewSet):
     filter_backends = [filters.SearchFilter]
     search_fields = ['full_name', 'phone']
 
+    def get_queryset(self):
+        qs = Patient.objects.all().order_by('-created_at')
+        
+        # Filter Logic: Exclude active patients if requested
+        exclude_active = self.request.query_params.get('exclude_active')
+        if exclude_active == 'true':
+            # Exclude patients who have any active visit
+            active_statuses = ['OPEN', 'IN_PROGRESS', 'WAITING']
+            qs = qs.exclude(visits__status__in=active_statuses)
+            
+        return qs
+
     @action(detail=False, methods=['get'], url_path='export')
     def export_csv(self, request):
         return export_to_csv(

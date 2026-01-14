@@ -104,7 +104,7 @@ class PharmacySaleItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = PharmacySaleItem
         fields = '__all__'
-        read_only_fields = ['item_id', 'created_at', 'updated_at']
+        read_only_fields = ['item_id', 'created_at', 'updated_at', 'amount', 'sale']
 
 
 class PharmacySaleSerializer(serializers.ModelSerializer):
@@ -115,13 +115,13 @@ class PharmacySaleSerializer(serializers.ModelSerializer):
     class Meta:
         model = PharmacySale  # ✅ fixed (removed comma)
         fields = '__all__'
-        read_only_fields = ['sale_id', 'sale_date', 'created_at', 'updated_at']
+        read_only_fields = ['sale_id', 'sale_date', 'created_at', 'updated_at', 'total_amount']
 
     @transaction.atomic
     def create(self, validated_data):
         items_data = validated_data.pop('items', [])
 
-        sale = PharmacySale.objects.create(**validated_data)
+        sale = PharmacySale.objects.create(total_amount=0, **validated_data)
 
         total = 0
         for item in items_data:
