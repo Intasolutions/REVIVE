@@ -21,8 +21,17 @@ const Login = () => {
         setLoading(true);
         setError('');
         try {
-            await login(username, password);
-            navigate('/');
+            const userData = await login(username, password);
+
+            // Redirect based on role
+            switch (userData.role) {
+                case 'DOCTOR': navigate('/doctor'); break;
+                case 'RECEPTION': navigate('/reception'); break;
+                case 'PHARMACY': navigate('/pharmacy'); break;
+                case 'LAB': navigate('/lab'); break;
+                case 'CASUALTY': navigate('/casualty'); break;
+                default: navigate('/');
+            }
         } catch (err) {
             setError('Invalid credentials. Please try again.');
         } finally {

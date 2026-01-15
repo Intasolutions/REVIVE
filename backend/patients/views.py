@@ -108,6 +108,7 @@ class VisitViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         old_doctor = serializer.instance.doctor
         old_role = serializer.instance.assigned_role
+        
         visit = serializer.save()
         
         # Check for Doctor change

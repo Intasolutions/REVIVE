@@ -1,7 +1,8 @@
 from django.core.management.base import BaseCommand
 from django.db import transaction
 from patients.models import Patient, Visit
-from medical.models import DoctorNote, CasualtyLog
+from medical.models import DoctorNote
+from casualty.models import CasualtyLog
 from lab.models import LabCharge, LabInventory
 from pharmacy.models import Supplier, PharmacyStock, PurchaseInvoice, PharmacySale
 from billing.models import Invoice

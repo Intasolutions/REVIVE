@@ -42,11 +42,18 @@ const Laboratory = () => {
     const [activeTab, setActiveTab] = useState('queue'); // queue | inventory
     const [statusFilter, setStatusFilter] = useState('ALL');
     const [page, setPage] = useState(1);
+    const [labTests, setLabTests] = useState([]);
+
+    // Test Catalog Form
+    const [showTestModal, setShowTestModal] = useState(false);
+    const [testCatalogForm, setTestCatalogForm] = useState({ name: '', category: 'HAEMATOLOGY', price: '', normal_range: '' });
 
     // Modals
     const [showModal, setShowModal] = useState(false); // Add Test Modal
+    const [showInventoryModal, setShowInventoryModal] = useState(false); // Add Inventory Modal
     const [showResultModal, setShowResultModal] = useState(false);
     const [showPrintModal, setShowPrintModal] = useState(false);
+    const [stockModal, setStockModal] = useState({ show: false, type: 'IN', item: null });
 
     // Selected Items
     const [selectedCharge, setSelectedCharge] = useState(null);
@@ -56,6 +63,8 @@ const Laboratory = () => {
     // Forms
     const [resultData, setResultData] = useState({ results: {}, technician_name: 'MUHAMMED NIYAS', specimen: 'BLOOD' });
     const [testForm, setTestForm] = useState({ test_name: '', amount: '' });
+    const [stockForm, setStockForm] = useState({ qty: '', cost: '', notes: '' });
+    const [inventoryForm, setInventoryForm] = useState({ item_name: '', category: 'REAGENT', qty: 0, cost_per_unit: '', reorder_level: 10 });
     const [visitSearch, setVisitSearch] = useState([]);
     const [visitQuery, setVisitQuery] = useState('');
 
@@ -64,6 +73,10 @@ const Laboratory = () => {
         if (activeTab === 'queue') {
             fetchCharges();
             fetchPendingVisits();
+            fetchCharges();
+            fetchPendingVisits();
+        } else if (activeTab === 'test_catalog') {
+            fetchLabTests();
         } else {
             fetchInventory();
         }
@@ -113,6 +126,32 @@ const Laboratory = () => {
         } catch (err) { console.error(err); }
     };
 
+    const fetchLabTests = async () => {
+        try {
+            const { data } = await api.get('lab/tests/');
+            setLabTests(data.results || data || []);
+        } catch (err) { console.error("Failed to load tests", err); }
+    };
+
+    const handleSaveTest = async (e) => {
+        e.preventDefault();
+        try {
+            await api.post('lab/tests/', testCatalogForm);
+            showToast('success', 'Test Added Successfully');
+            setShowTestModal(false);
+            setTestCatalogForm({ name: '', category: 'HAEMATOLOGY', price: '', normal_range: '' });
+            fetchLabTests();
+        } catch (err) { showToast('error', 'Failed to add test'); }
+    };
+
+    // Group tests by category
+    const groupedTests = labTests.reduce((acc, test) => {
+        const cat = test.category_display || test.category;
+        if (!acc[cat]) acc[cat] = [];
+        acc[cat].push(test);
+        return acc;
+    }, {});
+
     // --- Actions ---
     const handleAddTest = async (e) => {
         e.preventDefault();
@@ -137,9 +176,28 @@ const Laboratory = () => {
 
     const handleOpenResultEntry = (charge) => {
         setSelectedCharge(charge);
+        // Default to array format
         const template = TEST_TEMPLATES[charge.test_name?.toUpperCase()] || [{ name: 'Result', unit: '', normal: '' }];
+
+        // If existing results are object (legacy), convert to array; otherwise use as is or use template
+        let initialResults = [];
+        if (charge.results) {
+            if (Array.isArray(charge.results)) {
+                initialResults = charge.results;
+            } else {
+                // Legacy object support conversion
+                initialResults = Object.entries(charge.results).map(([key, val]) => ({
+                    name: key,
+                    ...val
+                }));
+            }
+        } else {
+            // New entry from template
+            initialResults = template.map(t => ({ ...t, value: '' }));
+        }
+
         setResultData({
-            results: template.reduce((acc, t) => ({ ...acc, [t.name]: { ...t, value: '' } }), {}),
+            results: initialResults,
             technician_name: charge.technician_name || 'MUHAMMED NIYAS',
             specimen: charge.specimen || 'BLOOD'
         });
@@ -162,6 +220,25 @@ const Laboratory = () => {
         } catch (err) { showToast('error', "Failed to save results"); }
     };
 
+    const handleStockTransaction = async (e) => {
+        e.preventDefault();
+        try {
+            const endpoint = stockModal.type === 'IN' ? 'stock-in' : 'stock-out';
+            await api.post(`lab/inventory/${stockModal.item.item_id}/${endpoint}/`, {
+                qty: parseInt(stockForm.qty),
+                cost: stockModal.type === 'IN' ? parseFloat(stockForm.cost) : 0,
+                notes: stockForm.notes
+            });
+
+            setStockModal({ show: false, type: 'IN', item: null });
+            setStockForm({ qty: '', cost: '', notes: '' });
+            fetchInventory();
+            showToast('success', `Stock ${stockModal.type === 'IN' ? 'Updated' : 'Deducted'} Successfully`);
+        } catch (err) {
+            showToast('error', err.response?.data?.error || "Transaction Failed");
+        }
+    };
+
     const handleUpdateStatus = async (id, status) => {
         const isConfirmed = await confirm({
             title: `Mark as ${status}?`,
@@ -180,6 +257,36 @@ const Laboratory = () => {
         } catch (err) { showToast('error', "Failed to update status"); }
     };
 
+    const handleSaveItem = async (e) => {
+        e.preventDefault();
+        try {
+            if (inventoryForm.id) {
+                // Edit Mode
+                await api.patch(`lab/inventory/${inventoryForm.id}/`, inventoryForm);
+                showToast('success', 'Item Updated Successfully');
+            } else {
+                // Create Mode
+                await api.post('lab/inventory/', inventoryForm);
+                showToast('success', 'New Item Added Successfully');
+            }
+            setShowInventoryModal(false);
+            setInventoryForm({ item_name: '', category: 'REAGENT', qty: 0, cost_per_unit: '', reorder_level: 10 });
+            fetchInventory();
+        } catch (err) { showToast('error', "Failed to save item"); }
+    };
+
+    const handleEditItem = (item) => {
+        setInventoryForm({
+            id: item.item_id,
+            item_name: item.item_name,
+            category: item.category,
+            qty: item.qty,
+            cost_per_unit: item.cost_per_unit || '',
+            reorder_level: item.reorder_level
+        });
+        setShowInventoryModal(true);
+    };
+
     return (
         <div className="p-6 h-screen bg-[#F8FAFC] font-sans text-slate-900 flex flex-col overflow-hidden">
 
@@ -188,21 +295,31 @@ const Laboratory = () => {
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight text-slate-950">Laboratory</h1>
                     <div className="flex items-center gap-6 mt-2">
-                        {['queue', 'inventory'].map(tab => (
+                        {['queue', 'inventory', 'test_catalog'].map(tab => (
                             <button
                                 key={tab}
                                 onClick={() => setActiveTab(tab)}
                                 className={`pb-1 text-sm font-bold transition-all border-b-2 ${activeTab === tab ? 'text-blue-600 border-blue-600' : 'text-slate-400 border-transparent hover:text-slate-600'}`}
                             >
-                                {tab === 'queue' ? 'Diagnostic Queue' : 'Lab Inventory'}
+                                {tab === 'queue' ? 'Diagnostic Queue' : tab === 'inventory' ? 'Lab Inventory' : 'Test Catalog'}
                             </button>
                         ))}
                     </div>
                 </div>
                 <div className="flex gap-3">
-                    <button onClick={() => setShowModal(true)} className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/20 hover:bg-blue-700 transition-all active:scale-95">
-                        <Plus size={18} /> New Request
-                    </button>
+                    {activeTab === 'queue' ? (
+                        <button onClick={() => setShowModal(true)} className="flex items-center gap-2 px-5 py-2.5 bg-blue-600 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-600/20 hover:bg-blue-700 transition-all active:scale-95">
+                            <Plus size={18} /> New Request
+                        </button>
+                    ) : activeTab === 'inventory' ? (
+                        <button onClick={() => setShowInventoryModal(true)} className="flex items-center gap-2 px-5 py-2.5 bg-slate-900 text-white rounded-xl font-bold text-sm shadow-lg shadow-slate-900/20 hover:bg-slate-800 transition-all active:scale-95">
+                            <Plus size={18} /> Add Item
+                        </button>
+                    ) : (
+                        <button onClick={() => setShowTestModal(true)} className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 text-white rounded-xl font-bold text-sm shadow-lg shadow-emerald-600/20 hover:bg-emerald-700 transition-all active:scale-95">
+                            <Plus size={18} /> Add Test
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -340,26 +457,43 @@ const Laboratory = () => {
                             <table className="w-full text-left border-collapse">
                                 <thead className="bg-slate-50 sticky top-0 shadow-sm">
                                     <tr>
-                                        {['Item Name', 'Category', 'Stock Level', 'Reorder Level', 'Status'].map(h => (
+                                        {['Item Name', 'Category', 'Stock Level', 'Reorder Level', 'Status', 'Actions'].map(h => (
                                             <th key={h} className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">{h}</th>
                                         ))}
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-50">
-                                    {inventoryData.results.map(i => (
-                                        <tr key={i.item_id} className="hover:bg-slate-50 transition-colors">
-                                            <td className="px-6 py-4 font-bold text-slate-900 text-sm">{i.item_name}</td>
+                                    {inventoryData.results.map(item => (
+                                        <tr key={item.item_id} className="hover:bg-slate-50 transition-colors group">
+                                            <td className="px-6 py-4 font-bold text-slate-900 text-sm">{item.item_name}</td>
                                             <td className="px-6 py-4">
-                                                <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-bold uppercase">{i.category}</span>
+                                                <span className="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-bold uppercase">{item.category}</span>
                                             </td>
-                                            <td className="px-6 py-4 font-mono font-bold text-slate-700">{i.qty} Units</td>
-                                            <td className="px-6 py-4 text-sm text-slate-500 font-medium">{i.reorder_level} Units</td>
+                                            <td className="px-6 py-4 font-mono font-bold text-slate-700">{item.qty} Units</td>
+                                            <td className="px-6 py-4 font-bold text-slate-700">₹{item.cost_per_unit || '0.00'}</td>
+                                            <td className="px-6 py-4 text-sm text-slate-500 font-medium">{item.reorder_level} Units</td>
                                             <td className="px-6 py-4">
-                                                {i.is_low_stock && (
+                                                {item.is_low_stock ? (
                                                     <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-red-50 text-red-600 text-[10px] font-black uppercase tracking-wide">
                                                         <AlertTriangle size={10} /> Low Stock
                                                     </span>
-                                                )}
+                                                ) : <span className="text-emerald-600 text-xs font-bold">In Stock</span>}
+                                            </td>
+                                            <td className="px-6 py-4">
+                                                <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                                    <button
+                                                        onClick={() => setStockModal({ show: true, type: 'IN', item: item })}
+                                                        className="px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-600 font-bold text-xs hover:bg-emerald-100 transition-colors"
+                                                    >
+                                                        + Stock In
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setStockModal({ show: true, type: 'OUT', item: item })}
+                                                        className="px-3 py-1.5 rounded-lg bg-amber-50 text-amber-600 font-bold text-xs hover:bg-amber-100 transition-colors"
+                                                    >
+                                                        - Stock Out
+                                                    </button>
+                                                </div>
                                             </td>
                                         </tr>
                                     ))}
@@ -371,11 +505,91 @@ const Laboratory = () => {
                         </div>
                     </div>
                 )}
+                {/* 3. TEST CATALOG TAB */}
+                {activeTab === 'test_catalog' && (
+                    <div className="flex flex-col h-full">
+                        <div className="flex-1 overflow-auto">
+                            <table className="w-full text-left border-collapse">
+                                <thead className="bg-slate-50 sticky top-0 shadow-sm">
+                                    <tr>
+                                        {['Test Name', 'Category', 'Price', 'Normal Range'].map(h => (
+                                            <th key={h} className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">{h}</th>
+                                        ))}
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-50">
+                                    {labTests.map(test => (
+                                        <tr key={test.id} className="hover:bg-slate-50 transition-colors group">
+                                            <td className="px-6 py-4 font-bold text-slate-900 text-sm">{test.name}</td>
+                                            <td className="px-6 py-4">
+                                                <span className="px-2.5 py-1 rounded-full bg-blue-50 text-blue-600 text-xs font-bold uppercase">{test.category_display || test.category}</span>
+                                            </td>
+                                            <td className="px-6 py-4 font-mono font-bold text-slate-700">₹{test.price}</td>
+                                            <td className="px-6 py-4 text-xs font-bold text-slate-500 whitespace-pre-wrap">{test.normal_range || '--'}</td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* --- Modals --- */}
+            {/* New Test Catalog Modal */}
+            <AnimatePresence>
+                {showTestModal && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-950/40 backdrop-blur-sm no-print">
+                        <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-hidden flex flex-col">
+                            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                                <h3 className="text-lg font-black text-emerald-900 uppercase tracking-tight">Add New Test</h3>
+                                <button onClick={() => setShowTestModal(false)} className="p-2 rounded-full hover:bg-slate-200 transition-colors"><X size={20} className="text-slate-500" /></button>
+                            </div>
+                            <form onSubmit={handleSaveTest} className="p-8 space-y-6">
+                                <div className="space-y-4">
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Test Name</label>
+                                        <Input value={testCatalogForm.name} onChange={e => setTestCatalogForm({ ...testCatalogForm, name: e.target.value })} required className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold" />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Category</label>
+                                        <div className="relative">
+                                            <select
+                                                value={testCatalogForm.category}
+                                                onChange={e => setTestCatalogForm({ ...testCatalogForm, category: e.target.value })}
+                                                className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-100 rounded-xl font-bold text-slate-800 focus:border-blue-500 outline-none transition-all appearance-none"
+                                            >
+                                                {['HAEMATOLOGY', 'BIOCHEMISTRY', 'URINE', 'STOOL', 'OTHERS'].map(c => (
+                                                    <option key={c} value={c}>{c}</option>
+                                                ))}
+                                            </select>
+                                            <ChevronRight className="absolute right-4 top-1/2 -translate-y-1/2 rotate-90 text-slate-400 pointer-events-none" size={16} />
+                                        </div>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Price (₹)</label>
+                                        <Input type="number" value={testCatalogForm.price} onChange={e => setTestCatalogForm({ ...testCatalogForm, price: e.target.value })} required className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold" />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Normal Range (Optional)</label>
+                                        <textarea
+                                            value={testCatalogForm.normal_range}
+                                            onChange={e => setTestCatalogForm({ ...testCatalogForm, normal_range: e.target.value })}
+                                            className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-100 rounded-xl font-bold text-slate-800 focus:border-blue-500 outline-none transition-all min-h-[100px]"
+                                            placeholder="e.g. 13.0 - 17.0 g/dL"
+                                        />
+                                    </div>
+                                </div>
+                                <div className="flex justify-end gap-3 pt-4">
+                                    <Button type="submit" className="w-full h-12 rounded-xl bg-emerald-600 text-white font-bold shadow-lg shadow-emerald-600/20">Add Test to Catalog</Button>
+                                </div>
+                            </form>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
 
-            {/* New Test Modal */}
+            {/* New Lab Request Modal */}
             <AnimatePresence>
                 {showModal && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-950/40 backdrop-blur-sm no-print">
@@ -420,33 +634,120 @@ const Laboratory = () => {
                                 )}
 
                                 {selectedVisit && selectedVisit.lab_referral_details && (
-                                    <div className="p-4 bg-purple-50 rounded-xl border border-purple-100">
-                                        <p className="text-[10px] font-black text-purple-400 uppercase tracking-widest mb-1">Doctor's Note / Required Tests</p>
-                                        <p className="text-sm font-bold text-slate-800">{selectedVisit.lab_referral_details}</p>
+                                    <div className="p-4 bg-purple-50 rounded-xl border border-purple-100 mb-6">
+                                        <p className="text-[10px] font-black text-purple-400 uppercase tracking-widest mb-3">Recommended Tests</p>
+                                        <div className="flex flex-wrap gap-2">
+                                            {selectedVisit.lab_referral_details.split(', ').map(testName => {
+                                                const cleanName = testName.trim();
+                                                const catalogTest = labTests.find(t => t.name.toLowerCase() === cleanName.toLowerCase());
+                                                return (
+                                                    <button
+                                                        key={cleanName}
+                                                        type="button"
+                                                        onClick={() => {
+                                                            setTestForm({
+                                                                test_name: cleanName,
+                                                                amount: catalogTest ? catalogTest.price : ''
+                                                            });
+                                                        }}
+                                                        className={`flex items-center gap-2 px-3 py-1.5 border shadow-sm rounded-lg transition-all group ${testForm.test_name.toLowerCase() === cleanName.toLowerCase()
+                                                                ? 'bg-purple-600 border-purple-600 text-white shadow-purple-200'
+                                                                : 'bg-white border-purple-200 text-slate-700 hover:border-purple-400'
+                                                            }`}
+                                                    >
+                                                        <div className={`w-2 h-2 rounded-full ${catalogTest ? 'bg-emerald-400' : 'bg-amber-400'} ${testForm.test_name.toLowerCase() === cleanName.toLowerCase() ? 'bg-white' : ''}`} />
+                                                        <span className="text-xs font-bold">{cleanName}</span>
+                                                        {testForm.test_name.toLowerCase() === cleanName.toLowerCase() && <CheckCircle2 size={12} />}
+                                                    </button>
+                                                );
+                                            })}
+
+                                            {/* Add Additional Test Toggle */}
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    setTestForm({ test_name: '', amount: '' });
+                                                    // This effectively deselects recommendation and allows manual search
+                                                }}
+                                                className={`flex items-center gap-2 px-3 py-1.5 border border-dashed border-slate-300 rounded-lg text-xs font-bold text-slate-500 hover:text-blue-600 hover:border-blue-400 hover:bg-blue-50 transition-all ${!testForm.test_name ? 'bg-blue-50 border-blue-400 text-blue-600' : ''}`}
+                                            >
+                                                <Plus size={12} />
+                                                Add Other Test
+                                            </button>
+                                        </div>
                                     </div>
                                 )}
 
                                 <div className="space-y-4">
-                                    <div className="space-y-2">
-                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Test Name</label>
-                                        <div className="relative">
-                                            <Input
-                                                value={testForm.test_name}
-                                                onChange={e => setTestForm({ ...testForm, test_name: e.target.value })}
-                                                placeholder="Enter test name..."
-                                                className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold text-slate-800 placeholder-slate-400 focus:border-blue-500 outline-none transition-all"
-                                                required
-                                            />
+                                    {(!selectedVisit?.lab_referral_details || !testForm.test_name || !selectedVisit.lab_referral_details.toLowerCase().includes(testForm.test_name.toLowerCase())) && (
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Search & Select Test</label>
+                                            <div className="relative">
+                                                <select
+                                                    value={testForm.test_name}
+                                                    onChange={e => {
+                                                        const selected = labTests.find(t => t.name === e.target.value);
+                                                        setTestForm({
+                                                            ...testForm,
+                                                            test_name: e.target.value,
+                                                            amount: selected ? selected.price : ''
+                                                        });
+                                                    }}
+                                                    className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-100 rounded-xl font-bold text-slate-800 focus:border-blue-500 outline-none transition-all appearance-none"
+                                                    required
+                                                >
+                                                    <option value="">Select Test...</option>
+                                                    {Object.entries(groupedTests).map(([category, tests]) => (
+                                                        <optgroup key={category} label={category}>
+                                                            {tests.map(t => (
+                                                                <option key={t.id} value={t.name}>{t.name}</option>
+                                                            ))}
+                                                        </optgroup>
+                                                    ))}
+                                                </select>
+                                                <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                                                    <ChevronRight className="rotate-90" size={16} />
+                                                </div>
+                                            </div>
                                         </div>
-                                    </div>
-                                    <div className="space-y-2">
-                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Cost (₹)</label>
-                                        <Input type="number" placeholder="0.00" value={testForm.amount} onChange={e => setTestForm({ ...testForm, amount: e.target.value })} required className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold" />
-                                    </div>
+                                    )}
+
+                                    {/* Cost Display: Show Standard Price if matched, otherwise show Input */}
+                                    {testForm.test_name && (
+                                        <div className="space-y-2">
+                                            {(() => {
+                                                const catalog = labTests.find(t => t.name.toLowerCase() === testForm.test_name.toLowerCase());
+                                                const isStandardPrice = catalog && parseFloat(catalog.price) === parseFloat(testForm.amount || 0);
+
+                                                if (isStandardPrice) {
+                                                    return (
+                                                        <div className="flex justify-between items-center px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl">
+                                                            <div>
+                                                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Test Cost</p>
+                                                                <p className="font-bold text-slate-700 text-sm">{testForm.test_name}</p>
+                                                            </div>
+                                                            <div className="text-right">
+                                                                <span className="block text-xs font-bold text-emerald-600 uppercase tracking-wide">Standard</span>
+                                                                <span className="font-mono font-black text-slate-900 text-lg">₹{testForm.amount}</span>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                }
+                                                return (
+                                                    <div className="space-y-2">
+                                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Custom Cost (₹)</label>
+                                                        <Input type="number" placeholder="0.00" value={testForm.amount} onChange={e => setTestForm({ ...testForm, amount: e.target.value })} required className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold" />
+                                                    </div>
+                                                );
+                                            })()}
+                                        </div>
+                                    )}
                                 </div>
 
                                 <div className="flex justify-end gap-3 pt-4">
-                                    <Button type="submit" className="w-full h-12 rounded-xl bg-slate-900 text-white font-bold shadow-lg shadow-slate-900/20">Create Request</Button>
+                                    <Button type="submit" disabled={!testForm.test_name} className="w-full h-12 rounded-xl bg-slate-900 text-white font-bold shadow-lg shadow-slate-900/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                                        {testForm.test_name ? `Create Request for ${testForm.test_name}` : 'Select a Test'}
+                                    </Button>
                                 </div>
                             </form>
                         </motion.div>
@@ -476,26 +777,79 @@ const Laboratory = () => {
                                 </div>
 
                                 <div className="space-y-3">
-                                    {Object.entries(resultData.results).map(([name, field]) => (
-                                        <div key={name} className="grid grid-cols-12 gap-4 items-center bg-slate-50 p-4 rounded-xl border border-slate-100 hover:border-blue-200 transition-colors">
-                                            <span className="col-span-4 text-sm font-bold text-slate-700">{name}</span>
+                                    {resultData.results.map((field, index) => (
+                                        <div key={index} className="grid grid-cols-12 gap-4 items-center bg-slate-50 p-4 rounded-xl border border-slate-100 hover:border-blue-200 transition-colors group">
+                                            <div className="col-span-4">
+                                                <input
+                                                    className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 font-bold text-slate-700 text-sm outline-none transition-all placeholder:text-slate-300"
+                                                    placeholder="Parameter Name"
+                                                    value={field.name}
+                                                    onChange={e => {
+                                                        const newResults = [...resultData.results];
+                                                        newResults[index].name = e.target.value;
+                                                        setResultData({ ...resultData, results: newResults });
+                                                    }}
+                                                />
+                                            </div>
                                             <div className="col-span-4">
                                                 <input
                                                     className="w-full bg-white border-2 border-slate-200 rounded-lg px-3 py-2 text-sm font-bold text-slate-900 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all"
-                                                    placeholder="Result"
+                                                    placeholder="Value"
                                                     value={field.value}
-                                                    onChange={e => setResultData(prev => ({
-                                                        ...prev,
-                                                        results: { ...prev.results, [name]: { ...prev.results[name], value: e.target.value } }
-                                                    }))}
-                                                    autoFocus={Object.keys(resultData.results)[0] === name}
-                                                    required
+                                                    onChange={e => {
+                                                        const newResults = [...resultData.results];
+                                                        newResults[index].value = e.target.value;
+                                                        setResultData({ ...resultData, results: newResults });
+                                                    }}
                                                 />
                                             </div>
-                                            <span className="col-span-2 text-xs font-bold text-slate-500">{field.unit || '-'}</span>
-                                            <span className="col-span-2 text-xs font-bold text-slate-400 text-right truncate">{field.normal}</span>
+                                            <div className="col-span-2">
+                                                <input
+                                                    className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 text-xs font-bold text-slate-500 outline-none transition-all"
+                                                    placeholder="Unit"
+                                                    value={field.unit}
+                                                    onChange={e => {
+                                                        const newResults = [...resultData.results];
+                                                        newResults[index].unit = e.target.value;
+                                                        setResultData({ ...resultData, results: newResults });
+                                                    }}
+                                                />
+                                            </div>
+                                            <div className="col-span-2 relative">
+                                                <input
+                                                    className="w-full bg-transparent border-b border-transparent hover:border-slate-300 focus:border-blue-500 text-xs font-bold text-slate-400 text-right outline-none transition-all"
+                                                    placeholder="Ref Range"
+                                                    value={field.normal}
+                                                    onChange={e => {
+                                                        const newResults = [...resultData.results];
+                                                        newResults[index].normal = e.target.value;
+                                                        setResultData({ ...resultData, results: newResults });
+                                                    }}
+                                                />
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        const newResults = resultData.results.filter((_, i) => i !== index);
+                                                        setResultData({ ...resultData, results: newResults });
+                                                    }}
+                                                    className="absolute -right-8 top-1/2 -translate-y-1/2 p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg opacity-0 group-hover:opacity-100 transition-all"
+                                                >
+                                                    <X size={14} />
+                                                </button>
+                                            </div>
                                         </div>
                                     ))}
+
+                                    <button
+                                        type="button"
+                                        onClick={() => setResultData({
+                                            ...resultData,
+                                            results: [...resultData.results, { name: '', value: '', unit: '', normal: '' }]
+                                        })}
+                                        className="w-full py-3 border-2 border-dashed border-slate-200 rounded-xl text-slate-400 font-bold text-xs hover:border-blue-300 hover:text-blue-600 hover:bg-blue-50 transition-all flex items-center justify-center gap-2"
+                                    >
+                                        <Plus size={16} /> Add Parameter
+                                    </button>
                                 </div>
 
                                 <div className="grid grid-cols-2 gap-6 pt-6 border-t border-slate-100">
@@ -578,16 +932,20 @@ const Laboratory = () => {
                                     <table className="w-full text-left">
                                         <thead>
                                             <tr className="border-b border-slate-200">
-                                                <th className="py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/3">Investigation</th>
-                                                <th className="py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/4">Observed Value</th>
-                                                <th className="py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/4">Unit</th>
+                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/6">Category</th>
+                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/6">Stock Level</th>
+                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/6">Cost/Unit</th>
+                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/6">Reorder Level</th>
                                                 <th className="py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Reference Range</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100">
-                                            {printCharge.results && Object.entries(printCharge.results).map(([key, val]) => (
-                                                <tr key={key}>
-                                                    <td className="py-4 font-bold text-slate-700 text-sm">{key}</td>
+                                            {(Array.isArray(printCharge.results)
+                                                ? printCharge.results
+                                                : Object.entries(printCharge.results || {}).map(([key, val]) => ({ name: key, ...val }))
+                                            ).map((val, idx) => (
+                                                <tr key={idx}>
+                                                    <td className="py-4 font-bold text-slate-700 text-sm">{val.name}</td>
                                                     <td className="py-4 font-black text-slate-900 text-sm">{val.value}</td>
                                                     <td className="py-4 font-bold text-slate-500 text-xs">{val.unit}</td>
                                                     <td className="py-4 font-bold text-slate-500 text-xs text-right whitespace-pre-wrap">{val.normal}</td>
@@ -618,6 +976,134 @@ const Laboratory = () => {
                                     <Printer size={18} className="mr-2" /> Print Report
                                 </Button>
                             </div>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
+
+            {/* Stock Manager Modal */}
+            <AnimatePresence>
+                {stockModal.show && stockModal.item && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-950/40 backdrop-blur-sm no-print">
+                        <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-sm rounded-[2rem] shadow-2xl overflow-hidden flex flex-col">
+                            <div className={`p-6 border-b flex justify-between items-center ${stockModal.type === 'IN' ? 'bg-emerald-50 border-emerald-100' : 'bg-amber-50 border-amber-100'}`}>
+                                <div>
+                                    <h3 className={`text-lg font-black uppercase tracking-tight ${stockModal.type === 'IN' ? 'text-emerald-900' : 'text-amber-900'}`}>
+                                        {stockModal.type === 'IN' ? 'Stock In' : 'Stock Out'}
+                                    </h3>
+                                    <p className="text-sm font-bold opacity-60">{stockModal.item.item_name}</p>
+                                </div>
+                                <button onClick={() => setStockModal({ ...stockModal, show: false })} className="p-2 rounded-full hover:bg-white/50 transition-colors"><X size={20} className="opacity-60" /></button>
+                            </div>
+                            <form onSubmit={handleStockTransaction} className="p-6 space-y-4">
+                                <div className="space-y-2">
+                                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Quantity</label>
+                                    <Input
+                                        type="number"
+                                        autoFocus
+                                        placeholder="0"
+                                        value={stockForm.qty}
+                                        onChange={e => setStockForm({ ...stockForm, qty: e.target.value })}
+                                        required
+                                        className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold text-lg"
+                                    />
+                                </div>
+
+                                {stockModal.type === 'IN' && (
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Total Cost (₹)</label>
+                                        <Input
+                                            type="number"
+                                            placeholder="0.00"
+                                            value={stockForm.cost}
+                                            onChange={e => setStockForm({ ...stockForm, cost: e.target.value })}
+                                            className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold"
+                                        />
+                                    </div>
+                                )}
+
+                                <div className="space-y-2">
+                                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Notes / Reason</label>
+                                    <Input
+                                        placeholder="Optional..."
+                                        value={stockForm.notes}
+                                        onChange={e => setStockForm({ ...stockForm, notes: e.target.value })}
+                                        className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold"
+                                    />
+                                </div>
+
+                                <div className="pt-2">
+                                    <Button
+                                        type="submit"
+                                        className={`w-full h-12 rounded-xl text-white font-bold shadow-lg ${stockModal.type === 'IN' ? 'bg-emerald-600 shadow-emerald-600/20' : 'bg-amber-600 shadow-amber-600/20'}`}
+                                    >
+                                        Update Stock
+                                    </Button>
+                                </div>
+                            </form>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
+            {/* Inventory Creation Modal */}
+            <AnimatePresence>
+                {showInventoryModal && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-950/40 backdrop-blur-sm no-print">
+                        <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-hidden flex flex-col">
+                            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                                <h3 className="text-lg font-black text-slate-900 uppercase tracking-tight">{inventoryForm.id ? 'Edit Item' : 'Add New Item'}</h3>
+                                <button onClick={() => setShowInventoryModal(false)} className="p-2 rounded-full hover:bg-slate-200 transition-colors"><X size={20} className="text-slate-500" /></button>
+                            </div>
+                            <form onSubmit={handleSaveItem} className="p-8 space-y-6">
+                                <div className="space-y-4">
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Item Name</label>
+                                        <Input
+                                            value={inventoryForm.item_name}
+                                            onChange={e => setInventoryForm({ ...inventoryForm, item_name: e.target.value })}
+                                            placeholder="e.g., Glucose Kit, Syringe..."
+                                            className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold text-slate-800"
+                                            required
+                                        />
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Category</label>
+                                        <div className="relative">
+                                            <Input
+                                                value={inventoryForm.category}
+                                                onChange={e => setInventoryForm({ ...inventoryForm, category: e.target.value })}
+                                                placeholder="e.g. Reagent, Kit, Consumable..."
+                                                className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold text-sm text-slate-800 focus:border-blue-500 outline-none transition-all"
+                                                list="category-suggestions"
+                                                required
+                                            />
+                                            <datalist id="category-suggestions">
+                                                <option value="REAGENT" />
+                                                <option value="KIT" />
+                                                <option value="CONSUMABLE" />
+                                                <option value="EQUIPMENT" />
+                                            </datalist>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Initial Qty</label>
+                                            <Input type="number" placeholder="0" value={inventoryForm.qty} onChange={e => setInventoryForm({ ...inventoryForm, qty: e.target.value })} required className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold" />
+                                        </div>
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Cost / Unit (₹)</label>
+                                            <Input type="number" placeholder="0.00" value={inventoryForm.cost_per_unit} onChange={e => setInventoryForm({ ...inventoryForm, cost_per_unit: e.target.value })} className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold" />
+                                        </div>
+                                    </div>
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Reorder Level</label>
+                                        <Input type="number" placeholder="10" value={inventoryForm.reorder_level} onChange={e => setInventoryForm({ ...inventoryForm, reorder_level: e.target.value })} required className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold" />
+                                    </div>
+                                </div>
+                                <div className="flex justify-end gap-3 pt-4">
+                                    <Button type="submit" className="w-full h-12 rounded-xl bg-slate-900 text-white font-bold shadow-lg shadow-slate-900/20">{inventoryForm.id ? 'Save Changes' : 'Add Item'}</Button>
+                                </div>
+                            </form>
                         </motion.div>
                     </div>
                 )}

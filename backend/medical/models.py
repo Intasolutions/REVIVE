@@ -17,10 +17,4 @@ class DoctorNote(BaseModel):
         return f"Note for Visit {getattr(self.visit, 'id', self.visit.id)}"
 
 
-class CasualtyLog(BaseModel):
-    visit = models.ForeignKey(Visit, on_delete=models.CASCADE, related_name='casualty_logs')
-    transfer_path = models.TextField()
-    treatment_notes = models.TextField()
 
-    def __str__(self):
-        return f"Casualty Log {self.id}"

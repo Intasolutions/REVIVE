@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { TrendingUp, Calendar, Download, PieChart, Users, Pill, FlaskConical, IndianRupee, Stethoscope, ClipboardList, X } from 'lucide-react';
+import { TrendingUp, Calendar, Download, PieChart, Users, Pill, FlaskConical, IndianRupee, Stethoscope, ClipboardList, Package, X } from 'lucide-react';
 import {
     AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
     BarChart, Bar, Cell
@@ -45,6 +45,7 @@ const Reports = () => {
         { id: 'doctor', name: 'Doctor Report', icon: <Stethoscope size={18} /> },
         { id: 'pharmacy', name: 'Pharmacy', icon: <Pill size={18} /> },
         { id: 'lab', name: 'Lab Tests', icon: <FlaskConical size={18} /> },
+        { id: 'inventory', name: 'Inventory Logs', icon: <Package size={18} /> },
     ];
 
     const getChartData = () => {
@@ -104,6 +105,20 @@ const Reports = () => {
                     row.test_name,
                     `₹${row.amount}`,
                     new Date(row.date).toLocaleDateString()
+                ])
+            };
+        }
+        if (activeReport === 'inventory') {
+            return {
+                headers: ['Log ID', 'Item', 'Transaction', 'Qty', 'Cost', 'User', 'Date'],
+                rows: (data?.details || []).map(row => [
+                    row.id.substring(0, 8),
+                    row.item_name,
+                    <span className={`px-2 py-1 rounded-full text-xs font-bold ${row.type === 'STOCK_IN' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{row.type}</span>,
+                    row.qty,
+                    `₹${row.cost || '0.00'}`,
+                    row.performed_by || 'Unknown',
+                    new Date(row.date).toLocaleDateString() + ' ' + new Date(row.date).toLocaleTimeString()
                 ])
             };
         }

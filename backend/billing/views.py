@@ -19,7 +19,7 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAdminOrReception]
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['visit__patient__full_name', 'patient_name', 'payment_status']
-    filterset_fields = ['payment_status', 'visit__doctor']
+    filterset_fields = ['payment_status', 'visit__doctor', 'visit__patient', 'visit__patient__id']
     ordering_fields = ['created_at', 'total_amount']
 
     @action(detail=False, methods=['get'])
@@ -49,10 +49,6 @@ class InvoiceViewSet(viewsets.ModelViewSet):
     @action(detail=False, methods=['get'])
     def pending_visits(self, request):
         # Pending Billing: Closed Visits that do not have an associated invoice
-        # Note: In a real app we might check if 'visit__invoices__isnull=True', 
-        # but since related_name='invoices' (one to many?) actually it's one-to-many. 
-        # If we want one invoice per visit, we check if any invoice exists.
-        
         visits = Visit.objects.filter(status='CLOSED', invoices__isnull=True).order_by('-updated_at')
         serializer = VisitSerializer(visits, many=True)
         return Response(serializer.data)

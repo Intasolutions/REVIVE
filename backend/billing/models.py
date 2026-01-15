@@ -24,6 +24,8 @@ class InvoiceItem(BaseModel):
     hsn = models.CharField(max_length=20, null=True, blank=True)
     batch = models.CharField(max_length=50, null=True, blank=True)
     expiry = models.CharField(max_length=20, null=True, blank=True) # Store as string for flexibility in manual entry
+    dosage = models.CharField(max_length=50, null=True, blank=True) # e.g. "1-0-1"
+    duration = models.CharField(max_length=50, null=True, blank=True) # e.g. "5 Days"
     gst_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     
     amount = models.DecimalField(max_digits=10, decimal_places=2)

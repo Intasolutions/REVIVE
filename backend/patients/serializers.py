@@ -5,10 +5,15 @@ from .models import Patient, Visit
 class PatientSerializer(serializers.ModelSerializer):
     p_id = serializers.UUIDField(source='id', read_only=True)
 
+    total_visits = serializers.SerializerMethodField()
+
     class Meta:
         model = Patient
-        fields = ['id', 'p_id', 'full_name', 'age', 'gender', 'phone', 'address', 'id_proof', 'created_at', 'updated_at']
+        fields = ['id', 'p_id', 'full_name', 'age', 'gender', 'phone', 'address', 'id_proof', 'total_visits', 'created_at', 'updated_at']
         read_only_fields = ['id', 'p_id', 'created_at', 'updated_at']
+
+    def get_total_visits(self, obj):
+        return obj.visits.count()
 
     def validate_phone(self, value):
         cleaned = value.strip()

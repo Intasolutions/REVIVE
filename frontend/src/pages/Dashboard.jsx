@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Users, Activity, TrendingUp, Package, Clock, ChevronRight, RefreshCw } from 'lucide-react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import api from '../api/axios';
@@ -26,10 +27,23 @@ const StatCard = ({ label, value, change, icon: Icon, iconBg }) => (
 
 const Dashboard = () => {
     const { user } = useAuth();
+    const navigate = useNavigate();
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
+        // Redirect non-admins to their respective modules
+        if (user && user.role !== 'ADMIN') {
+            switch (user.role) {
+                case 'DOCTOR': navigate('/doctor'); break;
+                case 'RECEPTION': navigate('/reception'); break;
+                case 'PHARMACY': navigate('/pharmacy'); break;
+                case 'LAB': navigate('/lab'); break;
+                case 'CASUALTY': navigate('/casualty'); break;
+                default: break;
+            }
+        }
+
         const fetchStats = async () => {
             try {
                 const { data } = await api.get('/core/dashboard/stats/');
@@ -40,8 +54,8 @@ const Dashboard = () => {
                 setLoading(false);
             }
         };
-        fetchStats();
-    }, []);
+        if (user?.role === 'ADMIN') fetchStats();
+    }, [user, navigate]);
 
     if (loading) {
         return (

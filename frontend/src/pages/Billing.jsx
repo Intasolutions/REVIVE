@@ -21,13 +21,15 @@ const Billing = () => {
     const [patients, setPatients] = useState([]);
     const [pharmacyStock, setPharmacyStock] = useState([]);
 
+    const [globalGst, setGlobalGst] = useState(0); // Global GST Rate
+
     const [formData, setFormData] = useState({
         patient_name: "",
         visit: null,
         doctor: "",
         payment_status: "PENDING",
         items: [
-            { dept: "PHARMACY", description: "", qty: 1, unit_price: 0, amount: 0, hsn: "", batch: "", gst_percent: 0, expiry: "" }
+            { dept: "PHARMACY", description: "", qty: 1, unit_price: 0, amount: 0, hsn: "", batch: "", gst_percent: 0, expiry: "", dosage: "", duration: "" }
         ]
     });
 
@@ -79,7 +81,7 @@ const Billing = () => {
     const fetchMetadata = async () => {
         try {
             const [docRes, patRes, stockRes] = await Promise.all([
-                api.get(`users/?role=DOCTOR`),
+                api.get(`users/management/doctors/`),
                 api.get(`reception/patients/`),
                 api.get(`pharmacy/stock/`)
             ]);
@@ -95,16 +97,10 @@ const Billing = () => {
     };
 
     const handleBillNow = async (visit) => {
-        // Determine IDs safely from serializer
-        // Visit serializer might return nested patient object or just ID
         const patId = (visit.patient && typeof visit.patient === 'object') ? visit.patient.id : visit.patient;
         const docId = (visit.doctor && typeof visit.doctor === 'object') ? visit.doctor.id : visit.doctor;
-
-        // Find objects in our lists for safe name display
         const patientObj = patients.find(p => p.id === patId);
-        const doctorObj = doctors.find(d => d.id === docId);
 
-        // Use patient_name directly from visit if available, else look up
         const patientName = visit.patient_name || (patientObj ? patientObj.full_name : "Unknown");
 
         setFormData({
@@ -113,15 +109,25 @@ const Billing = () => {
             doctor: docId || "",
             payment_status: "PENDING",
             items: [
-                { dept: "PHARMACY", description: "", qty: 1, unit_price: 0, amount: 0, hsn: "", batch: "", gst_percent: 0, expiry: "" }
+                { dept: "PHARMACY", description: "", qty: 1, unit_price: 0, amount: 0, hsn: "", batch: "", gst_percent: 0, expiry: "", dosage: "", duration: "" }
             ]
         });
+        setGlobalGst(0); // Reset Global GST
+
+        try {
+            const existing = invoices.find(inv => (inv.visit === visit.id || inv.visit === visit.v_id) && inv.payment_status === 'PENDING');
+            if (existing) {
+                handleEditInvoice(existing);
+                setTimeout(() => handleImportPrescription(patId, visit.id || visit.v_id), 800);
+                return;
+            }
+
+        } catch (e) { console.error(e); }
+
         setSelectedPatientId(patId);
         setShowModal(true);
-
-        // Attempt Auto-Import with a small delay to allow state update or just pass ID
         const visitIdToPass = (visit.id || visit.v_id);
-        setTimeout(() => handleImportPrescription(patId, visitIdToPass), 300);
+        setTimeout(() => handleImportPrescription(patId, visitIdToPass), 500);
     };
 
     const handleImportPrescription = async (overridePatientId = null, overrideVisitId = null) => {
@@ -131,65 +137,111 @@ const Billing = () => {
             return;
         }
         try {
-            // Try fetching by Specific Visit ID (safest) or Patient
-            let url = `medical/doctor-notes/?visit__patient=${patId}`;
-
-            // Prioritize explicit ID, then form state
             const vId = overrideVisitId || ((typeof formData.visit === 'object') ? formData.visit.id : formData.visit);
 
+            let notesData = [];
+            let source = "visit";
+
+            const getResults = (data) => (data && data.results && Array.isArray(data.results)) ? data.results : (Array.isArray(data) ? data : []);
+
             if (vId) {
-                // Use visit filter for robustness (backend accepts both visit and visit__id)
-                url = `medical/doctor-notes/?visit=${vId}`;
+                try {
+                    const res = await api.get(`medical/doctor-notes/?visit=${vId}`);
+                    notesData = getResults(res.data);
+                } catch (e) { console.warn("Strict visit fetch failed", e); }
             }
 
-            console.log("Fetching notes from:", url); // Debugging
-            const res = await api.get(url);
+            if (!notesData || notesData.length === 0) {
+                try {
+                    let res = await api.get(`medical/doctor-notes/?visit__patient=${patId}`);
+                    let fetched = getResults(res.data);
 
-            if (res.data.length > 0) {
-                const lastNote = res.data[0];
-                const newItems = [];
-
-                // AUTO-FILL DOCTOR if missing
-                if (!formData.doctor || formData.doctor === "") {
-                    if (lastNote.created_by) {
-                        setFormData(prev => ({ ...prev, doctor: lastNote.created_by }));
+                    if (fetched.length === 0) {
+                        res = await api.get(`medical/doctor-notes/?visit__patient__id=${patId}`);
+                        fetched = getResults(res.data);
                     }
+                    notesData = fetched;
+                    source = "patient";
+                } catch (e) { console.warn("Patient fetch failed", e); }
+            }
+
+            if (notesData && notesData.length > 0) {
+                const lastNote = notesData[0];
+
+                if (source === "patient") {
+                    console.info(`Using fallback note from ${new Date(lastNote.created_at).toLocaleDateString()}`);
                 }
 
-                // Parse prescription JSON
+                const newItems = [];
+
+                if ((!formData.doctor || formData.doctor === "") && lastNote.created_by) {
+                    setFormData(prev => ({ ...prev, doctor: lastNote.created_by }));
+                }
+
+                let presItems = [];
                 if (Array.isArray(lastNote.prescription)) {
-                    lastNote.prescription.forEach(p => {
-                        // Find in Pharmacy Stock
-                        const stockItem = pharmacyStock.find(s => s.name.toLowerCase() === p.medicine.toLowerCase());
+                    presItems = lastNote.prescription.map(p => ({ name: p.medicine, details: p.details }));
+                } else if (lastNote.prescription && typeof lastNote.prescription === 'object') {
+                    // PARSE DOSAGE/DURATION from details string "1-0-1 | 5 Days | Qty: 15"
+                    presItems = Object.entries(lastNote.prescription).map(([name, details]) => {
+                        let dosage = "";
+                        let duration = "";
+                        let qty_str = "";
+
+                        // Heuristic Parsing
+                        if (details) {
+                            const parts = details.split('|').map(s => s.trim());
+                            dosage = parts[0] || ""; // Assume first part is dosage
+                            if (parts[1]) duration = parts[1];
+                        }
+
+                        return { name, details, dosage, duration };
+                    });
+                }
+
+                if (presItems.length > 0) {
+                    presItems.forEach(p => {
+                        const medName = (p.name || "").trim();
+                        if (!medName) return;
+
+                        const stockItem = pharmacyStock.find(s => s.name.trim().toLowerCase() === medName.toLowerCase());
 
                         newItems.push({
                             dept: "PHARMACY",
-                            description: p.medicine,
+                            description: medName,
                             qty: 1,
                             unit_price: stockItem ? parseFloat(stockItem.mrp) : 0,
                             hsn: stockItem ? stockItem.hsn : "",
                             batch: stockItem ? stockItem.batch_no : "",
-                            gst_percent: stockItem ? parseFloat(stockItem.gst_percent) : 0,
+                            gst_percent: 0,
                             expiry: stockItem ? stockItem.expiry_date : "",
-                            amount: stockItem ? parseFloat(stockItem.mrp) : 0
+                            amount: stockItem ? parseFloat(stockItem.mrp) : 0,
+                            dosage: p.dosage || "",
+                            duration: p.duration || ""
                         });
                     });
-                }
 
-                if (newItems.length > 0) {
-                    setFormData(prev => ({
-                        ...prev,
-                        items: newItems
-                    }));
-                    // Optional: Notification toast instead of alert
-                } else {
-                    alert("No medicines found in the last prescription.");
+                    if (newItems.length > 0) {
+                        setFormData(prev => {
+                            const currentItems = prev.items.filter(i => !(i.dept === "PHARMACY" && i.description === "" && i.amount == 0));
+                            const existingNames = new Set(currentItems.map(i => i.description.trim().toLowerCase()));
+                            const uniqueNewItems = newItems.filter(i => !existingNames.has(i.description.trim().toLowerCase()));
+
+                            if (uniqueNewItems.length === 0) return prev;
+
+                            const msg = source === "patient"
+                                ? `Imported ${uniqueNewItems.length} meds from LATEST patient record.`
+                                : `Imported ${uniqueNewItems.length} medicines successfully.`;
+
+                            alert(msg);
+
+                            return {
+                                ...prev,
+                                items: [...currentItems, ...uniqueNewItems]
+                            };
+                        });
+                    }
                 }
-            } else {
-                // If specific visit failed, maybe try patient fallback? 
-                // For now, alerting specific message helps debugging
-                console.warn("No notes found for URL:", url);
-                alert("No doctor notes found for this visit.");
             }
         } catch (err) {
             console.error("Error importing prescription:", err);
@@ -197,39 +249,113 @@ const Billing = () => {
         }
     };
 
-    const calculateTotal = (items) => {
-        return items.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0).toFixed(2);
+    const calculateSubtotal = (items) => {
+        return items.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
+    };
+
+    const calculateTotal = (items, gstRate) => {
+        const subtotal = calculateSubtotal(items);
+        const tax = subtotal * (gstRate / 100);
+        return (subtotal + tax).toFixed(2);
     };
 
     const handleCreateInvoice = async () => {
-        const total = calculateTotal(formData.items);
+        const subtotal = calculateSubtotal(formData.items);
+        const total = calculateTotal(formData.items, globalGst);
+
+        const itemsWithTax = formData.items.map(i => ({
+            ...i,
+            gst_percent: globalGst
+        }));
+
         const invoiceData = {
             patient_name: formData.patient_name,
             payment_status: formData.payment_status,
             total_amount: total,
-            items: formData.items,
-            visit: formData.visit // Link the invoice to the visit
+            items: itemsWithTax,
+            visit: formData.visit
         };
 
         try {
-            await api.post(`billing/invoices/`, invoiceData);
+            if (formData.id) {
+                await api.patch(`billing/invoices/${formData.id}/`, invoiceData);
+            } else {
+                await api.post(`billing/invoices/`, invoiceData);
+            }
             setShowModal(false);
-            fetchInvoices();
-            fetchStats();
-            fetchPendingVisits(); // Refresh pending list
             setFormData({
                 patient_name: "",
                 visit: null,
                 doctor: "",
                 payment_status: "PENDING",
-                items: [{ dept: "PHARMACY", description: "", qty: 1, unit_price: 0, amount: 0, hsn: "", batch: "", gst_percent: 0, expiry: "" }]
+                items: [{ dept: "PHARMACY", description: "", qty: 1, unit_price: 0, amount: 0, hsn: "", batch: "", gst_percent: 0, expiry: "", dosage: "", duration: "" }]
             });
+            setGlobalGst(0);
+            fetchInvoices();
+            fetchStats();
+            fetchPendingVisits();
         } catch (err) {
-            alert("Failed to create billing invoice");
+            console.error(err);
+            alert("Failed to save invoice");
         }
     };
 
-    // UI Components
+    const handleEditInvoice = (invoice) => {
+        let docId = "";
+
+        // Try to find linked visit details from pending list, BUT trust invoice data first
+        if (invoice.visit) {
+            // Attempt to find doctor info if available in pending visits
+            const linkedVisit = pendingVisits.find(v => (v.id === invoice.visit || v.id === invoice.visit?.id));
+            if (linkedVisit) {
+                docId = linkedVisit.doctor ? (typeof linkedVisit.doctor === 'object' ? linkedVisit.doctor.id : linkedVisit.doctor) : "";
+            }
+        }
+
+        let detectedGst = 0;
+        if (invoice.items && invoice.items.length > 0) {
+            detectedGst = parseFloat(invoice.items[0].gst_percent) || 0;
+        }
+        setGlobalGst(detectedGst);
+
+        setFormData({
+            id: invoice.id,
+            patient_name: invoice.patient_name,
+            visit: invoice.visit,
+            doctor: docId || formData.doctor, // Keep existing if not found
+            payment_status: invoice.payment_status,
+            items: invoice.items.map(i => ({ ...i }))
+        });
+
+        // ROBUST PATIENT SELECTION:
+        // 1. If Invoice has patient_id directly (new serializer field)
+        if (invoice.patient_id) {
+            setSelectedPatientId(invoice.patient_id);
+        }
+        // 2. Fallback: Try to derive from visit in pending list
+        else if (invoice.visit) {
+            const v = pendingVisits.find(pv => pv.id === invoice.visit);
+            if (v && v.patient) {
+                setSelectedPatientId(typeof v.patient === 'object' ? v.patient.id : v.patient);
+            }
+        }
+
+        setShowModal(true);
+    };
+
+    const handleMarkAsPaid = async (invoice) => {
+        const invId = invoice.id || "Unknown";
+        if (!window.confirm(`Mark invoice #${invId.toString().slice(0, 8)} as PAID?`)) return;
+        try {
+            await api.patch(`billing/invoices/${invId}/`, { payment_status: 'PAID' });
+            fetchInvoices();
+            fetchStats();
+        } catch (error) {
+            console.error(error);
+            alert("Failed to update status.");
+        }
+    };
+
     const StatusBadge = ({ status }) => {
         const isPaid = status === "PAID";
         return (
@@ -263,8 +389,9 @@ const Billing = () => {
                                 visit: null,
                                 doctor: "",
                                 payment_status: "PENDING",
-                                items: [{ dept: "PHARMACY", description: "", qty: 1, unit_price: 0, amount: 0, hsn: "", batch: "", gst_percent: 0, expiry: "" }]
+                                items: [{ dept: "PHARMACY", description: "", qty: 1, unit_price: 0, amount: 0, hsn: "", batch: "", gst_percent: 0, expiry: "", dosage: "", duration: "" }]
                             });
+                            setGlobalGst(0);
                             setSelectedPatientId(null);
                             setShowModal(true);
                         }}
@@ -290,9 +417,7 @@ const Billing = () => {
 
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                         {pendingVisits.map(visit => {
-                            // Use patient_name directly from serializer
                             const patName = visit.patient_name || "Unknown Patient";
-
                             return (
                                 <div key={visit.id} className="bg-white p-4 rounded-lg border border-blue-100 shadow-sm flex items-center justify-between group hover:shadow-md transition-all">
                                     <div className="flex items-center gap-3">
@@ -377,21 +502,28 @@ const Billing = () => {
                                     <StatusBadge status={invoice.payment_status} />
                                 </td>
                                 <td className="px-6 py-4 text-slate-500">{new Date(invoice.created_at).toLocaleDateString()}</td>
-                                <td className="px-6 py-4 text-right">
+                                <td className="px-6 py-4 text-right flex justify-end gap-2">
+                                    {(invoice.payment_status || "").toString().toUpperCase() === 'PENDING' && (
+                                        <button
+                                            onClick={() => handleMarkAsPaid(invoice)}
+                                            className="text-emerald-500 hover:text-emerald-700 transition-colors p-2 rounded-full hover:bg-emerald-50 border border-emerald-100"
+                                            title="Collect Payment"
+                                        >
+                                            <IndianRupee className="w-4 h-4" />
+                                        </button>
+                                    )}
                                     <button className="text-slate-400 hover:text-blue-600 transition-colors p-2 rounded-full hover:bg-blue-50">
                                         <Printer className="w-4 h-4" />
                                     </button>
-                                    {/* Add Collect Payment button if PENDING */}
+                                    <button
+                                        onClick={() => handleEditInvoice(invoice)}
+                                        className="text-slate-400 hover:text-emerald-600 transition-colors p-2 rounded-full hover:bg-emerald-50"
+                                    >
+                                        <FileText className="w-4 h-4" />
+                                    </button>
                                 </td>
                             </tr>
                         ))}
-                        {invoices.length === 0 && !loading && (
-                            <tr>
-                                <td colSpan="6" className="px-6 py-12 text-center text-slate-400">
-                                    No invoices found. Create a new bill to get started.
-                                </td>
-                            </tr>
-                        )}
                     </tbody>
                 </table>
             </div>
@@ -404,12 +536,12 @@ const Billing = () => {
                             initial={{ opacity: 0, scale: 0.95 }}
                             animate={{ opacity: 1, scale: 1 }}
                             exit={{ opacity: 0, scale: 0.95 }}
-                            className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col"
+                            className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[95vh] overflow-hidden flex flex-col"
                         >
                             {/* Modal Header */}
                             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
                                 <div>
-                                    <h2 className="text-xl font-bold text-slate-900">New Invoice</h2>
+                                    <h2 className="text-xl font-bold text-slate-900">{formData.id ? 'Edit Invoice' : 'New Invoice'}</h2>
                                     <p className="text-sm text-slate-500">Create a new bill for pharmacy or services</p>
                                 </div>
                                 <button onClick={() => setShowModal(false)} className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors">
@@ -420,7 +552,7 @@ const Billing = () => {
                             {/* Modal Body */}
                             <div className="p-6 overflow-y-auto flex-1 space-y-6">
 
-                                {/* Top Section: Patient & Doctor */}
+                                {/* Top Section */}
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 p-5 bg-slate-50 rounded-xl border border-slate-100">
                                     <div className="space-y-2">
                                         <label className="text-xs font-semibold uppercase text-slate-500 tracking-wider">Select Patient</label>
@@ -452,7 +584,27 @@ const Billing = () => {
                                         <select
                                             className="w-full p-2.5 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
                                             value={formData.doctor}
-                                            onChange={e => setFormData({ ...formData, doctor: e.target.value })}
+                                            onChange={e => {
+                                                const docId = e.target.value;
+                                                const doc = doctors.find(d => d.id == docId);
+
+                                                let newItems = [...formData.items];
+                                                if (doc) {
+                                                    const fee = parseFloat(doc.consultation_fee) || 0;
+                                                    newItems = newItems.map(item => {
+                                                        const isConsultation = item.dept === 'CONSULTATION' || item.description.includes('Consultation Fee');
+                                                        if (isConsultation) {
+                                                            return {
+                                                                ...item,
+                                                                unit_price: fee,
+                                                                amount: (item.qty * fee).toFixed(2)
+                                                            };
+                                                        }
+                                                        return item;
+                                                    });
+                                                }
+                                                setFormData({ ...formData, doctor: docId, items: newItems });
+                                            }}
                                         >
                                             <option value="">Select Doctor</option>
                                             {doctors.map(d => (
@@ -486,11 +638,10 @@ const Billing = () => {
                                                 <tr>
                                                     <th className="px-4 py-3 w-10">#</th>
                                                     <th className="px-4 py-3">Item / Medicine</th>
-                                                    <th className="px-4 py-3 w-24">Batch</th>
-                                                    <th className="px-4 py-3 w-24">Exp</th>
+                                                    <th className="px-4 py-3 w-20">Dosage</th>
+                                                    <th className="px-4 py-3 w-20">Duration</th>
                                                     <th className="px-4 py-3 w-20">Qty</th>
-                                                    <th className="px-4 py-3 w-24">Price (MRP)</th>
-                                                    <th className="px-4 py-3 w-24">GST %</th>
+                                                    <th className="px-4 py-3 w-24 align-right">Price</th>
                                                     <th className="px-4 py-3 w-28 text-right">Amount</th>
                                                     <th className="px-4 py-3 w-10"></th>
                                                 </tr>
@@ -503,7 +654,7 @@ const Billing = () => {
                                                             <input
                                                                 list="medicine-list"
                                                                 type="text"
-                                                                className="w-full p-1.5 bg-transparent border-b border-transparent focus:border-blue-500 outline-none"
+                                                                className="w-full p-1.5 bg-transparent border-b border-transparent focus:border-blue-500 outline-none font-medium"
                                                                 placeholder="Search Medicine..."
                                                                 value={item.description}
                                                                 onChange={(e) => {
@@ -519,8 +670,6 @@ const Billing = () => {
                                                                         batch: stockItem ? stockItem.batch_no : newItems[idx].batch,
                                                                         expiry: stockItem ? stockItem.expiry_date : newItems[idx].expiry,
                                                                         unit_price: price,
-                                                                        gst_percent: stockItem ? parseFloat(stockItem.gst_percent) : newItems[idx].gst_percent,
-                                                                        hsn: stockItem ? stockItem.hsn : newItems[idx].hsn,
                                                                         amount: (newItems[idx].qty * price).toFixed(2)
                                                                     };
                                                                     setFormData({ ...formData, items: newItems });
@@ -531,16 +680,36 @@ const Billing = () => {
                                                             </datalist>
                                                         </td>
                                                         <td className="px-4 py-2">
-                                                            <input type="text" className="w-full bg-transparent outline-none text-slate-500" value={item.batch} readOnly tabIndex="-1" />
+                                                            <input
+                                                                type="text"
+                                                                className="w-full p-1.5 bg-slate-50 border border-slate-100 rounded text-center text-xs"
+                                                                placeholder="1-0-1"
+                                                                value={item.dosage || ""}
+                                                                onChange={(e) => {
+                                                                    const newItems = [...formData.items];
+                                                                    newItems[idx].dosage = e.target.value;
+                                                                    setFormData({ ...formData, items: newItems });
+                                                                }}
+                                                            />
                                                         </td>
                                                         <td className="px-4 py-2">
-                                                            <input type="text" className="w-full bg-transparent outline-none text-slate-500" value={item.expiry} readOnly tabIndex="-1" />
+                                                            <input
+                                                                type="text"
+                                                                className="w-full p-1.5 bg-slate-50 border border-slate-100 rounded text-center text-xs"
+                                                                placeholder="5 Days"
+                                                                value={item.duration || ""}
+                                                                onChange={(e) => {
+                                                                    const newItems = [...formData.items];
+                                                                    newItems[idx].duration = e.target.value;
+                                                                    setFormData({ ...formData, items: newItems });
+                                                                }}
+                                                            />
                                                         </td>
                                                         <td className="px-4 py-2">
                                                             <input
                                                                 type="number"
                                                                 min="1"
-                                                                className="w-full p-1.5 bg-slate-50 rounded border border-slate-200 text-center focus:border-blue-500 outline-none"
+                                                                className="w-full p-1.5 bg-slate-50 rounded border border-slate-200 text-center focus:border-blue-500 outline-none font-bold"
                                                                 value={item.qty}
                                                                 onChange={(e) => {
                                                                     const qty = parseInt(e.target.value) || 0;
@@ -554,7 +723,7 @@ const Billing = () => {
                                                                 }}
                                                             />
                                                         </td>
-                                                        <td className="px-4 py-2">
+                                                        <td className="px-4 py-2 text-right">
                                                             <input
                                                                 type="number"
                                                                 className="w-full p-1.5 bg-transparent border-b border-transparent focus:border-blue-500 outline-none text-right"
@@ -571,25 +740,7 @@ const Billing = () => {
                                                                 }}
                                                             />
                                                         </td>
-                                                        <td className="px-4 py-2">
-                                                            <select
-                                                                className="w-full bg-transparent outline-none"
-                                                                value={Math.round(item.gst_percent)}
-                                                                onChange={(e) => {
-                                                                    const gst = parseFloat(e.target.value);
-                                                                    const newItems = [...formData.items];
-                                                                    newItems[idx] = { ...item, gst_percent: gst };
-                                                                    setFormData({ ...formData, items: newItems });
-                                                                }}
-                                                            >
-                                                                <option value="0">0%</option>
-                                                                <option value="5">5%</option>
-                                                                <option value="12">12%</option>
-                                                                <option value="18">18%</option>
-                                                                <option value="28">28%</option>
-                                                            </select>
-                                                        </td>
-                                                        <td className="px-4 py-2 text-right font-medium text-slate-900">
+                                                        <td className="px-4 py-2 text-right font-bold text-slate-900">
                                                             ₹{item.amount}
                                                         </td>
                                                         <td className="px-4 py-2 text-center">
@@ -610,7 +761,7 @@ const Billing = () => {
                                         <button
                                             onClick={() => setFormData(prev => ({
                                                 ...prev,
-                                                items: [...prev.items, { dept: "PHARMACY", description: "", qty: 1, unit_price: 0, amount: 0, hsn: "", batch: "", gst_percent: 0, expiry: "" }]
+                                                items: [...prev.items, { dept: "PHARMACY", description: "", qty: 1, unit_price: 0, amount: 0, hsn: "", batch: "", gst_percent: 0, expiry: "", dosage: "", duration: "" }]
                                             }))}
                                             className="w-full py-2 bg-slate-50 text-slate-500 text-sm font-medium hover:bg-slate-100 transition-colors border-t border-slate-200"
                                         >
@@ -621,18 +772,35 @@ const Billing = () => {
 
                                 {/* Totals Section */}
                                 <div className="flex justify-end pt-4">
-                                    <div className="w-64 space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-100">
-                                        <div className="flex justify-between text-sm text-slate-600">
+                                    <div className="w-80 space-y-3 bg-slate-50 p-5 rounded-xl border border-slate-100">
+                                        <div className="flex justify-between text-sm text-slate-600 font-medium">
                                             <span>Subtotal</span>
-                                            <span>₹{calculateTotal(formData.items)}</span>
+                                            <span>₹{calculateSubtotal(formData.items).toFixed(2)}</span>
                                         </div>
+
+                                        <div className="flex justify-between items-center text-sm text-slate-600">
+                                            <span>Add Global GST</span>
+                                            <select
+                                                className="bg-white border border-slate-200 rounded px-2 py-1 text-xs focus:border-blue-500 outline-none"
+                                                value={globalGst}
+                                                onChange={(e) => setGlobalGst(parseFloat(e.target.value))}
+                                            >
+                                                <option value="0">0%</option>
+                                                <option value="5">5%</option>
+                                                <option value="12">12%</option>
+                                                <option value="18">18%</option>
+                                                <option value="28">28%</option>
+                                            </select>
+                                        </div>
+
                                         <div className="flex justify-between text-sm text-slate-600">
-                                            <span>GST (Included)</span>
-                                            <span className="text-slate-400 italic text-xs">(Calculated on bill)</span>
+                                            <span>GST Amount</span>
+                                            <span>+ ₹{(calculateSubtotal(formData.items) * (globalGst / 100)).toFixed(2)}</span>
                                         </div>
-                                        <div className="border-t border-slate-200 pt-3 flex justify-between font-bold text-lg text-slate-900">
-                                            <span>Total</span>
-                                            <span>₹{calculateTotal(formData.items)}</span>
+
+                                        <div className="border-t border-slate-200 pt-3 flex justify-between font-bold text-xl text-slate-900">
+                                            <span>Total Details</span>
+                                            <span>₹{calculateTotal(formData.items, globalGst)}</span>
                                         </div>
                                     </div>
                                 </div>
@@ -651,7 +819,7 @@ const Billing = () => {
                                     onClick={handleCreateInvoice}
                                     className="px-6 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg hover:shadow-lg hover:shadow-blue-500/30 transition-all font-medium flex items-center gap-2"
                                 >
-                                    <CheckCircle className="w-4 h-4" /> Generate Invoice
+                                    <CheckCircle className="w-4 h-4" /> {formData.id ? 'Update Invoice' : 'Generate Invoice'}
                                 </button>
                             </div>
                         </motion.div>

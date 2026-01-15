@@ -4,7 +4,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     LayoutDashboard, Users, Stethoscope, Pill,
     FlaskConical, Receipt, BarChart3, Settings,
-    LogOut, Heart, ChevronRight
+    LogOut, Heart, ChevronRight, Activity
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
@@ -14,14 +14,15 @@ const Sidebar = () => {
     const [isHovered, setIsHovered] = useState(false);
 
     const menuItems = [
-        { name: 'Dashboard', icon: LayoutDashboard, path: '/', roles: ['ADMIN', 'DOCTOR', 'RECEPTION', 'PHARMACY', 'LAB'] },
+        { name: 'Dashboard', icon: LayoutDashboard, path: '/', roles: ['ADMIN'] },
         { name: 'Reception', icon: Users, path: '/reception', roles: ['ADMIN', 'RECEPTION'] },
+        { name: 'Casualty', icon: Activity, path: '/casualty', roles: ['ADMIN', 'CASUALTY'] },
         { name: 'Doctor', icon: Stethoscope, path: '/doctor', roles: ['ADMIN', 'DOCTOR'] },
         { name: 'Pharmacy', icon: Pill, path: '/pharmacy', roles: ['ADMIN', 'PHARMACY'] },
         { name: 'Laboratory', icon: FlaskConical, path: '/lab', roles: ['ADMIN', 'LAB'] },
-        { name: 'Billing', icon: Receipt, path: '/billing', roles: ['ADMIN', 'RECEPTION'] },
         { name: 'Reports', icon: BarChart3, path: '/reports', roles: ['ADMIN'] },
-        { name: 'Users', icon: Settings, path: '/users', roles: ['ADMIN'] },
+        { name: 'Manage', icon: Settings, path: '/manage', roles: ['ADMIN'] },
+        { name: 'Users', icon: Users, path: '/users', roles: ['ADMIN'] },
     ].filter(item => item.roles.includes(user?.role));
 
     return (

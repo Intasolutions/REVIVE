@@ -8,7 +8,7 @@ from datetime import datetime
 from patients.models import Visit
 from billing.models import Invoice
 from pharmacy.models import PharmacySale
-from lab.models import LabCharge
+from lab.models import LabCharge, LabInventoryLog
 from medical.models import DoctorNote
 import csv
 from django.http import HttpResponse
@@ -178,5 +178,36 @@ class LabTestReportView(BaseReportView):
             "start_date": start_date,
             "end_date": end_date,
             "report_type": "Lab Tests",
+            "details": details
+        })
+
+
+class LabInventoryReportView(BaseReportView):
+    def get(self, request):
+        start_date, end_date = self.get_date_range(request)
+        
+        logs = LabInventoryLog.objects.filter(
+            created_at__date__gte=start_date,
+            created_at__date__lte=end_date
+        ).select_related('item')
+
+        if request.query_params.get('export') == 'csv':
+            data = [[l.id, l.item.item_name, l.transaction_type, l.qty, l.cost, l.performed_by, l.created_at] for l in logs]
+            return self.export_csv("inventory_report", ["Log ID", "Item", "Type", "Qty", "Cost", "User", "Date"], data)
+
+        details = [{
+            "id": l.id,
+            "item_name": l.item.item_name,
+            "type": l.transaction_type,
+            "qty": l.qty,
+            "cost": l.cost,
+            "performed_by": l.performed_by,
+            "date": l.created_at
+        } for l in logs]
+
+        return Response({
+            "start_date": start_date,
+            "end_date": end_date,
+            "report_type": "Lab Inventory Logs",
             "details": details
         })

@@ -26,6 +26,80 @@ const QueueSkeleton = () => (
     </div>
 );
 
+const HistoryModal = ({ history, onClose }) => {
+    if (!history) return null;
+    return (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center px-4">
+            <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={onClose} />
+            <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.95 }}
+                className="relative bg-white w-full max-w-2xl rounded-[32px] shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+            >
+                <div className="px-8 py-6 border-b border-slate-100 bg-slate-50 flex justify-between items-center">
+                    <div>
+                        <h3 className="text-xl font-bold text-slate-900">Consultation Details</h3>
+                        <p className="text-sm text-slate-500 font-medium">{new Date(history.created_at).toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</p>
+                    </div>
+                    <button onClick={onClose} className="p-2 -mr-2 text-slate-400 hover:text-slate-600 hover:bg-slate-200 rounded-full transition-all">
+                        <X size={24} />
+                    </button>
+                </div>
+                <div className="p-8 overflow-y-auto custom-scrollbar space-y-8">
+                    {/* Diagnosis & Notes */}
+                    <div className="space-y-4">
+                        <div className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                            <div className="p-1.5 bg-blue-100 rounded-lg text-blue-600"><Stethoscope size={16} /></div>
+                            Clinical Diagnosis
+                        </div>
+                        <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-slate-800 font-medium leading-relaxed">
+                            {history.diagnosis || 'No specific diagnosis recorded.'}
+                        </div>
+                        {history.notes && (
+                            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 text-slate-600 text-sm">
+                                <span className="font-bold block mb-1 text-slate-400 uppercase text-[10px]">Additional Notes</span>
+                                {history.notes}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Prescription */}
+                    {history.prescription && Object.keys(history.prescription).length > 0 && (
+                        <div className="space-y-4">
+                            <div className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                                <div className="p-1.5 bg-emerald-100 rounded-lg text-emerald-600"><Pill size={16} /></div>
+                                Prescribed Medication
+                            </div>
+                            <div className="grid gap-3">
+                                {Object.entries(history.prescription).map(([med, details]) => (
+                                    <div key={med} className="flex justify-between items-center p-3 border border-slate-100 rounded-xl bg-white shadow-sm">
+                                        <span className="font-bold text-slate-900">{med}</span>
+                                        <span className="text-xs font-bold bg-slate-100 text-slate-500 px-2 py-1 rounded">{details}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Lab Details */}
+                    {history.lab_referral_details && (
+                        <div className="space-y-4">
+                            <div className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                                <div className="p-1.5 bg-purple-100 rounded-lg text-purple-600"><ClipboardList size={16} /></div>
+                                Lab Requirements
+                            </div>
+                            <div className="p-4 bg-purple-50 rounded-2xl border border-purple-100 text-purple-900 text-sm font-medium">
+                                {history.lab_referral_details}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            </motion.div>
+        </div>
+    );
+};
+
 const Doctor = () => {
     const { user } = useAuth();
     const { showToast } = useToast();
@@ -38,6 +112,7 @@ const Doctor = () => {
     const [page, setPage] = useState(1);
     const [patientHistory, setPatientHistory] = useState([]);
     const [historyLoading, setHistoryLoading] = useState(false);
+    const [viewingHistory, setViewingHistory] = useState(null);
 
     // Form States
     const [notes, setNotes] = useState({ diagnosis: '', prescription: {}, notes: '' });
@@ -47,7 +122,12 @@ const Doctor = () => {
     const [medResults, setMedResults] = useState([]);
     const [selectedMeds, setSelectedMeds] = useState([]);
     const [referral, setReferral] = useState('NONE'); // NONE, LAB, PHARMACY, CASUALTY
-    const [labDetails, setLabDetails] = useState('');
+
+    // Lab Search States
+    const [labSearch, setLabSearch] = useState('');
+    const [labResults, setLabResults] = useState([]);
+    const [selectedTests, setSelectedTests] = useState([]);
+    const [existingNoteId, setExistingNoteId] = useState(null);
 
 
     // --- Effects ---
@@ -57,11 +137,57 @@ const Doctor = () => {
 
     useEffect(() => {
         if (selectedVisit) {
-            // Reset forms when switching patients
+            // Reset forms
             setNotes({ diagnosis: '', prescription: {}, notes: '' });
             setSelectedMeds([]);
             setReferral('NONE');
-            setLabDetails('');
+            setSelectedTests([]);
+            setExistingNoteId(null);
+
+            // Fetch potential existing note for this visit (Draft/Recovery)
+            const fetchExistingNote = async () => {
+                try {
+                    const vId = selectedVisit.v_id || selectedVisit.id;
+                    const { data } = await api.get(`/medical/doctor-notes/?visit=${vId}`);
+                    // data should be a list due to filtering, take first
+                    const existing = (data.results || data)[0];
+
+                    if (existing) {
+                        setExistingNoteId(existing.note_id || existing.id);
+                        setNotes({
+                            diagnosis: existing.diagnosis,
+                            prescription: {}, // Will process below
+                            notes: existing.notes
+                        });
+
+                        // Parse Prescription
+                        if (existing.prescription) {
+                            const meds = [];
+                            Object.entries(existing.prescription).forEach(([name, details]) => {
+                                // details string: "1-0-1 | 5 Days | Qty: 15"
+                                try {
+                                    const parts = details.split(' | ');
+                                    const dosage = parts[0];
+                                    const duration = parts[1];
+                                    const count = parts[2].replace('Qty: ', '');
+                                    meds.push({ name, dosage, duration, count });
+                                } catch (e) { console.error("Error parsing med", name, e); }
+                            });
+                            setSelectedMeds(meds);
+                        }
+
+                        // Parse Tests (Comma separated string)
+                        if (existing.lab_referral_details) {
+                            // If tests are in the string, we try to reconstruct tags
+                            // Note: We might miss categories/IDs but names will work for display
+                            const testNames = existing.lab_referral_details.split(', ');
+                            setSelectedTests(testNames.map((name, i) => ({ id: `restored-${i}`, name })));
+                        }
+                    }
+                } catch (err) { console.error("Error checking existing notes", err); }
+            };
+            fetchExistingNote();
+
             fetchPatientHistory(selectedVisit.patient_id || selectedVisit.patient);
 
         } else {
@@ -137,6 +263,32 @@ const Doctor = () => {
         setSelectedMeds(selectedMeds.map(m => m.name === name ? { ...m, [field]: value } : m));
     };
 
+    // --- Lab Search Functions ---
+    const searchLabTests = async (query) => {
+        setLabSearch(query);
+        if (query.length < 2) {
+            setLabResults([]);
+            return;
+        }
+        try {
+            const { data } = await api.get(`/lab/tests/?search=${query}`);
+            setLabResults(data.results || data);
+        } catch (err) { console.error(err); }
+    };
+
+    const addTest = (test) => {
+        if (!selectedTests.find(t => t.name === test.name)) {
+            setSelectedTests([...selectedTests, test]);
+            showToast('success', `${test.name} added`);
+        }
+        setLabSearch('');
+        setLabResults([]);
+    };
+
+    const removeTest = (id) => {
+        setSelectedTests(selectedTests.filter(t => t.id !== id));
+    };
+
     const handleSaveConsultation = async () => {
         if (!selectedVisit) return;
         try {
@@ -145,12 +297,20 @@ const Doctor = () => {
                 prescriptionObj[m.name] = `${m.dosage} | ${m.duration} | Qty: ${m.count}`;
             });
 
-            await api.post('/medical/doctor-notes/', {
+            const payload = {
                 visit: selectedVisit.v_id || selectedVisit.id,
                 ...notes,
                 prescription: prescriptionObj,
-                lab_referral_details: labDetails
-            });
+                lab_referral_details: selectedTests.map(t => t.name).join(', ') // Concatenate tests
+            };
+
+            if (existingNoteId) {
+                // Update existing note
+                await api.patch(`/medical/doctor-notes/${existingNoteId}/`, payload);
+            } else {
+                // Create new note
+                await api.post('/medical/doctor-notes/', payload);
+            }
 
             const updatePayload = referral !== 'NONE'
                 ? { status: 'OPEN', assigned_role: referral, doctor: null } // Release to other dept
@@ -163,6 +323,7 @@ const Doctor = () => {
             fetchQueue();
 
         } catch (err) {
+            console.error(err);
             showToast('error', 'Failed to save consultation details');
         }
     };
@@ -256,7 +417,9 @@ const Doctor = () => {
                                         <div className="flex items-center gap-3 text-xs font-bold text-slate-500 mt-1 uppercase tracking-wide">
                                             <span>ID: {(selectedVisit.v_id || selectedVisit.id).slice(0, 8)}</span>
                                             <span className="w-1 h-1 bg-slate-300 rounded-full" />
-                                            <span className="text-blue-600">Male • 34 Yrs</span>
+                                            <span className="text-blue-600">
+                                                {selectedVisit.patient_gender === 'M' ? 'Male' : selectedVisit.patient_gender === 'F' ? 'Female' : 'Other'} • {selectedVisit.patient_age} Yrs
+                                            </span>
                                         </div>
                                     </div>
                                 </div>
@@ -319,18 +482,64 @@ const Doctor = () => {
                                                     exit={{ opacity: 0, height: 0 }}
                                                     className="overflow-hidden"
                                                 >
-                                                    <div className="group mt-6">
-                                                        <label className="flex items-center gap-2 text-sm font-bold text-slate-700 mb-3">
-                                                            <div className="p-1.5 bg-purple-100 rounded-lg text-purple-600"><ClipboardList size={16} /></div>
-                                                            Lab Test Requirements
-                                                        </label>
-                                                        <textarea
-                                                            className="w-full p-5 bg-purple-50/50 border-2 border-purple-100 rounded-2xl text-sm font-medium text-slate-800 focus:bg-white focus:border-purple-500 focus:ring-4 focus:ring-purple-500/10 outline-none transition-all resize-none placeholder:text-slate-400"
-                                                            rows="3"
-                                                            placeholder="Specify tests or checkups required..."
-                                                            value={labDetails}
-                                                            onChange={(e) => setLabDetails(e.target.value)}
-                                                        />
+                                                    <div className="bg-purple-50/50 rounded-[24px] border border-purple-100 p-6 relative group focus-within:ring-4 focus-within:ring-purple-500/5 transition-all mt-6">
+                                                        <div className="flex justify-between items-center mb-4">
+                                                            <label className="flex items-center gap-2 text-sm font-bold text-slate-700">
+                                                                <div className="p-1.5 bg-purple-100 rounded-lg text-purple-600"><ClipboardList size={16} /></div>
+                                                                Lab Requisition
+                                                            </label>
+
+                                                            {/* Lab Search */}
+                                                            <div className="relative w-64 z-20">
+                                                                <Search className="absolute left-3 top-2.5 text-slate-400" size={14} />
+                                                                <input
+                                                                    className="w-full pl-9 pr-4 py-2 bg-white border border-purple-200 rounded-xl text-xs font-bold outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-500/10 transition-all shadow-sm placeholder:text-purple-300"
+                                                                    placeholder="Search lab tests..."
+                                                                    value={labSearch}
+                                                                    onChange={(e) => searchLabTests(e.target.value)}
+                                                                />
+                                                                <AnimatePresence>
+                                                                    {labResults.length > 0 && (
+                                                                        <motion.div
+                                                                            initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                                                                            className="absolute top-full left-0 right-0 mt-2 bg-white border border-slate-100 rounded-xl shadow-xl max-h-56 overflow-y-auto divide-y divide-slate-50 z-30"
+                                                                        >
+                                                                            {labResults.map(test => (
+                                                                                <div
+                                                                                    key={test.id}
+                                                                                    onClick={() => addTest(test)}
+                                                                                    className="px-4 py-3 hover:bg-purple-50 cursor-pointer flex justify-between items-center group"
+                                                                                >
+                                                                                    <span className="text-sm font-bold text-slate-700 group-hover:text-purple-700">{test.name}</span>
+                                                                                    {test.category && <span className="text-[10px] font-bold bg-slate-100 text-slate-500 px-2 py-1 rounded-md">{test.category}</span>}
+                                                                                </div>
+                                                                            ))}
+                                                                        </motion.div>
+                                                                    )}
+                                                                </AnimatePresence>
+                                                            </div>
+                                                        </div>
+
+                                                        {/* Selected Tests List */}
+                                                        <div className="flex flex-wrap gap-2 min-h-[50px]">
+                                                            {selectedTests.length === 0 && (
+                                                                <p className="text-xs text-slate-400 italic w-full text-center py-2">Search and add tests from the catalog</p>
+                                                            )}
+                                                            <AnimatePresence>
+                                                                {selectedTests.map((test) => (
+                                                                    <motion.div
+                                                                        key={test.id}
+                                                                        initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
+                                                                        className="flex items-center gap-2 pl-3 pr-2 py-1.5 bg-white border border-purple-200 rounded-lg shadow-sm"
+                                                                    >
+                                                                        <span className="text-xs font-bold text-slate-700">{test.name}</span>
+                                                                        <button onClick={() => removeTest(test.id)} className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-md transition-colors">
+                                                                            <X size={12} />
+                                                                        </button>
+                                                                    </motion.div>
+                                                                ))}
+                                                            </AnimatePresence>
+                                                        </div>
                                                     </div>
                                                 </motion.div>
                                             )}
@@ -450,11 +659,11 @@ const Doctor = () => {
                                                 <div className="grid grid-cols-2 gap-3">
                                                     <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
                                                         <p className="text-[10px] text-slate-400 font-bold uppercase">BP</p>
-                                                        <p className="text-lg font-bold text-slate-900">120/80</p>
+                                                        <p className="text-lg font-bold text-slate-900">{selectedVisit.vitals?.bp || '--/--'}</p>
                                                     </div>
                                                     <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100">
                                                         <p className="text-[10px] text-slate-400 font-bold uppercase">Temp</p>
-                                                        <p className="text-lg font-bold text-slate-900">98.4°F</p>
+                                                        <p className="text-lg font-bold text-slate-900">{selectedVisit.vitals?.temp ? `${selectedVisit.vitals.temp}°F` : '--°F'}</p>
                                                     </div>
                                                 </div>
                                             </div>
@@ -474,10 +683,10 @@ const Doctor = () => {
                                                         <div className="pl-8 text-xs text-slate-400 italic">No previous records.</div>
                                                     ) : (
                                                         patientHistory.map((h, i) => (
-                                                            <div key={i} className="relative pl-8 pb-6 group">
+                                                            <div key={i} className="relative pl-8 pb-6 group cursor-pointer" onClick={() => setViewingHistory(h)}>
                                                                 <div className="absolute left-0 top-1 w-5 h-5 bg-white border-2 border-slate-200 rounded-full group-hover:border-blue-500 transition-colors z-10" />
                                                                 <p className="text-xs font-bold text-slate-400 mb-1">{new Date(h.created_at).toLocaleDateString()}</p>
-                                                                <div className="p-3 bg-white border border-slate-200 rounded-xl shadow-sm group-hover:shadow-md transition-shadow">
+                                                                <div className="p-3 bg-white border border-slate-200 rounded-xl shadow-sm group-hover:shadow-md transition-all group-hover:border-blue-200">
                                                                     <p className="text-xs font-bold text-slate-800 line-clamp-2">{h.diagnosis}</p>
                                                                     {h.prescription && (
                                                                         <div className="mt-2 flex gap-1 flex-wrap">
@@ -500,10 +709,10 @@ const Doctor = () => {
                     ) : (
                         // Empty State
                         <div className="flex-1 flex flex-col items-center justify-center text-center p-12">
-
-                            {/* ^ Example trigger for illustrative purpose, in real code replace with: */}
                             <div className="w-24 h-24 bg-blue-50 rounded-full flex items-center justify-center mb-6 animate-pulse">
-                                <Stethoscope size={48} className="text-blue-200" />
+                                <div className="p-4 bg-white rounded-full shadow-sm">
+                                    <Stethoscope size={48} className="text-blue-200" />
+                                </div>
                             </div>
                             <h2 className="text-2xl font-bold text-slate-900 mb-2">Ready for Consultation</h2>
                             <p className="text-slate-500 max-w-md mx-auto">
@@ -513,7 +722,14 @@ const Doctor = () => {
                     )}
                 </div>
             </div>
-        </div >
+
+            {/* History Modal */}
+            <AnimatePresence>
+                {viewingHistory && (
+                    <HistoryModal history={viewingHistory} onClose={() => setViewingHistory(null)} />
+                )}
+            </AnimatePresence>
+        </div>
     );
 };
 
