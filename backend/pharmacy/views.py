@@ -2,6 +2,7 @@ import csv
 import io
 from datetime import datetime
 from django.db import transaction, models
+from django.db.models import Q
 from rest_framework import viewsets, permissions, filters, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -9,6 +10,8 @@ from rest_framework.views import APIView
 from rest_framework.parsers import MultiPartParser
 
 from .models import Supplier, PharmacyStock, PurchaseInvoice, PurchaseItem, PharmacySale
+from patients.models import Visit
+from patients.serializers import VisitSerializer
 from .serializers import (
     SupplierSerializer, PharmacyStockSerializer,
     PurchaseInvoiceSerializer, PharmacySaleSerializer
@@ -303,3 +306,34 @@ class PharmacySaleViewSet(viewsets.ModelViewSet):
         ctx = super().get_serializer_context()
         ctx["request"] = self.request
         return ctx
+
+
+class PharmacyQueueViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Lists visits assigned to PHARMACY.
+    """
+    permission_classes = [IsPharmacyOrAdmin]
+    serializer_class = VisitSerializer # Import this at top if not present, checking imports... it wasn't validly imported likely. Wait, I need to check imports.
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ['patient__full_name', 'patient__phone']
+    ordering_fields = ['updated_at']
+
+    def get_queryset(self):
+        # Visits assigned to PHARMACY
+        # OR assigned to LAB but have a prescription in doctor_note
+        return Visit.objects.filter(
+            Q(assigned_role='PHARMACY') | 
+            (Q(assigned_role='LAB') & ~Q(doctor_note__prescription={}) & Q(doctor_note__prescription__isnull=False))
+        ).exclude(status='CLOSED').order_by('updated_at')
+
+    @action(detail=True, methods=['post'])
+    def dispense(self, request, pk=None):
+        visit = self.get_object()
+        
+        # Mark as CLOSED so it shows up in billing "Ready for Billing"
+        # And maybe change assigned role to RECEPTION or NULL
+        visit.status = 'CLOSED'
+        visit.assigned_role = 'RECEPTION' # Hand off to reception for billing
+        visit.save()
+        
+        return Response({"status": "Dispensed and sent to Billing"}, status=status.HTTP_200_OK)

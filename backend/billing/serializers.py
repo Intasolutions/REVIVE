@@ -31,6 +31,8 @@ class InvoiceSerializer(serializers.ModelSerializer):
             items_data = validated_data.pop('items', [])
             invoice = Invoice.objects.create(**validated_data)
             for item_data in items_data:
+                # Remove non-model fields that might be sent from frontend
+                item_data.pop('stock_deducted', None) 
                 InvoiceItem.objects.create(invoice=invoice, **item_data)
             return invoice
         except Exception as e:
@@ -50,6 +52,7 @@ class InvoiceSerializer(serializers.ModelSerializer):
             # Simplest approach: Remove old items and re-create new ones
             instance.items.all().delete()
             for item_data in items_data:
+                item_data.pop('stock_deducted', None)
                 InvoiceItem.objects.create(invoice=instance, **item_data)
         
         return instance

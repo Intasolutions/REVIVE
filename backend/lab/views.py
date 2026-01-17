@@ -24,6 +24,7 @@ class LabTestViewSet(viewsets.ModelViewSet):
     filter_backends = [filters.SearchFilter, filters.OrderingFilter]
     search_fields = ['name', 'category']
     ordering_fields = ['category', 'name', 'price']
+    pagination_class = None
 
 
 

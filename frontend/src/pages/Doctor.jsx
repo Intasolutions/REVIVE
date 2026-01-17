@@ -200,14 +200,24 @@ const Doctor = () => {
         setLoading(true);
         try {
             const doctorFilter = user?.role === 'DOCTOR' ? `&doctor=${user.u_id}` : '';
-            const { data } = await api.get(`/reception/visits/?status=OPEN${doctorFilter}&page=${page}${globalSearch ? `&search=${encodeURIComponent(globalSearch)}` : ''}`);
-            setVisitsData(data);
+            const { data } = await api.get(`/reception/visits/?status__in=OPEN,IN_PROGRESS${doctorFilter}&page=${page}${globalSearch ? `&search=${encodeURIComponent(globalSearch)}` : ''}`);
+            // Safety filter: Ensure no Pharmacy referrals appear even if backend update lags
+            const cleanResults = (data.results || data).filter(v => v.assigned_role !== 'PHARMACY');
+            setVisitsData({ ...data, results: cleanResults });
         } catch (err) {
             showToast('error', 'Could not refresh patient queue');
         } finally {
             setLoading(false);
         }
     };
+
+    // Auto-refresh Queue
+    useEffect(() => {
+        if (user) {
+            const interval = setInterval(fetchQueue, 5000); // 5 seconds
+            return () => clearInterval(interval);
+        }
+    }, [user, page, globalSearch]);
 
     const fetchPatientHistory = async (pId) => {
         if (!pId) return;
@@ -233,7 +243,7 @@ const Doctor = () => {
             return;
         }
         try {
-            const { data } = await api.get(`/pharmacy/stock/?search=${query}`);
+            const { data } = await api.get(`/pharmacy/stock/?search=${query}&_t=${Date.now()}`);
             setMedResults(data.results || data);
         } catch (err) {
             console.error(err);
@@ -312,9 +322,17 @@ const Doctor = () => {
                 await api.post('/medical/doctor-notes/', payload);
             }
 
-            const updatePayload = referral !== 'NONE'
-                ? { status: 'OPEN', assigned_role: referral, doctor: null } // Release to other dept
-                : { status: 'CLOSED' }; // Discharge
+            let updatePayload;
+            if (referral === 'LAB') {
+                // Keep patient in doctor's queue (don't clear doctor)
+                updatePayload = { status: 'OPEN', assigned_role: referral };
+            } else if (referral !== 'NONE') {
+                // Release to other department (keep doctor field intact)
+                updatePayload = { status: 'OPEN', assigned_role: referral };
+            } else {
+                // Discharge
+                updatePayload = { status: 'CLOSED' };
+            }
 
             await api.patch(`/reception/visits/${selectedVisit.v_id || selectedVisit.id}/`, updatePayload);
 
@@ -545,6 +563,59 @@ const Doctor = () => {
                                             )}
                                         </AnimatePresence>
 
+                                        {/* --- Lab Reports Section --- */}
+                                        {selectedVisit.lab_results && selectedVisit.lab_results.length > 0 && (
+                                            <div className="mb-6">
+                                                <div className="flex items-center gap-3 mb-4">
+                                                    <div className="p-2 bg-purple-100 rounded-lg text-purple-600">
+                                                        <FlaskConical size={20} />
+                                                    </div>
+                                                    <h3 className="text-lg font-bold text-slate-800">Lab Reports</h3>
+                                                </div>
+                                                <div className="grid grid-cols-1 gap-4">
+                                                    {selectedVisit.lab_results.map((report, idx) => (
+                                                        <div key={idx} className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
+                                                            <div className="bg-slate-50 px-4 py-3 border-b border-slate-100 flex justify-between items-center">
+                                                                <div>
+                                                                    <p className="font-bold text-slate-900 text-sm">{report.test_name}</p>
+                                                                    <p className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">Technician: {report.technician}</p>
+                                                                </div>
+                                                                <span className="text-xs font-mono text-slate-400">{new Date(report.date).toLocaleDateString()}</span>
+                                                            </div>
+                                                            <div className="p-4">
+                                                                {Array.isArray(report.results) ? (
+                                                                    <table className="w-full text-sm text-left">
+                                                                        <thead className="text-[10px] text-slate-400 uppercase font-bold bg-slate-50/50">
+                                                                            <tr>
+                                                                                <th className="px-3 py-2">Parameter</th>
+                                                                                <th className="px-3 py-2">Result</th>
+                                                                                <th className="px-3 py-2">Unit</th>
+                                                                                <th className="px-3 py-2">Ref. Range</th>
+                                                                            </tr>
+                                                                        </thead>
+                                                                        <tbody className="divide-y divide-slate-100">
+                                                                            {report.results.map((res, rIdx) => (
+                                                                                <tr key={rIdx}>
+                                                                                    <td className="px-3 py-2 font-medium text-slate-700">{res.name}</td>
+                                                                                    <td className="px-3 py-2 font-bold text-slate-900">{res.value}</td>
+                                                                                    <td className="px-3 py-2 text-slate-500">{res.unit}</td>
+                                                                                    <td className="px-3 py-2 text-slate-400 text-xs">{res.normal}</td>
+                                                                                </tr>
+                                                                            ))}
+                                                                        </tbody>
+                                                                    </table>
+                                                                ) : (
+                                                                    <pre className="text-xs font-mono text-slate-700 bg-slate-50 p-3 rounded-lg overflow-auto">
+                                                                        {JSON.stringify(report.results, null, 2)}
+                                                                    </pre>
+                                                                )}
+                                                            </div>
+                                                        </div>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        )}
+
                                         {/* Prescription Pad */}
                                         <div className="bg-slate-50/50 rounded-[24px] border border-slate-100 p-6 relative group focus-within:ring-4 focus-within:ring-blue-500/5 transition-all">
                                             <div className="flex justify-between items-center mb-4">
@@ -593,54 +664,97 @@ const Doctor = () => {
                                                     </div>
                                                 ) : (
                                                     <AnimatePresence>
-                                                        {selectedMeds.map((med, idx) => (
-                                                            <motion.div
-                                                                key={med.name}
-                                                                initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}
-                                                                className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row gap-4 items-center"
-                                                            >
-                                                                <div className="flex-1 flex items-center gap-3 w-full">
-                                                                    <div className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center text-xs font-bold">
-                                                                        {idx + 1}
-                                                                    </div>
-                                                                    <span className="font-bold text-slate-800 text-sm">{med.name}</span>
-                                                                </div>
+                                                        {selectedMeds.map((med, idx) => {
+                                                            const prescribedQty = parseInt(med.count) || 0;
+                                                            const availableStock = med.stock || 0;
+                                                            const isInsufficient = prescribedQty > availableStock;
+                                                            const isLowStock = availableStock > 0 && availableStock < 10;
 
-                                                                {/* Smart Inputs */}
-                                                                <div className="flex items-center gap-2 w-full md:w-auto">
-                                                                    <div className="relative group">
-                                                                        <label className="absolute -top-2 left-2 px-1 bg-white text-[9px] font-bold text-slate-400 uppercase">Dosage</label>
-                                                                        <input
-                                                                            value={med.dosage}
-                                                                            onChange={(e) => updateMedField(med.name, 'dosage', e.target.value)}
-                                                                            className="w-20 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-center focus:border-blue-500 outline-none"
-                                                                        />
+                                                            return (
+                                                                <motion.div
+                                                                    key={med.name}
+                                                                    initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}
+                                                                    className={`bg-white p-4 rounded-xl border-2 shadow-sm flex flex-col gap-3 ${isInsufficient ? 'border-red-300 bg-red-50/30' : 'border-slate-200'
+                                                                        }`}
+                                                                >
+                                                                    <div className="flex items-center justify-between w-full">
+                                                                        <div className="flex items-center gap-3">
+                                                                            <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${isInsufficient ? 'bg-red-100 text-red-600' : 'bg-emerald-50 text-emerald-600'
+                                                                                }`}>
+                                                                                {idx + 1}
+                                                                            </div>
+                                                                            <div>
+                                                                                <span className="font-bold text-slate-800 text-sm">{med.name}</span>
+                                                                                <div className="flex items-center gap-2 mt-1">
+                                                                                    {isInsufficient ? (
+                                                                                        <span className="text-[10px] font-bold bg-red-100 text-red-700 px-2 py-1 rounded-md flex items-center gap-1">
+                                                                                            <AlertCircle size={12} />
+                                                                                            Only {availableStock} in stock
+                                                                                        </span>
+                                                                                    ) : isLowStock ? (
+                                                                                        <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-1 rounded-md">
+                                                                                            Low Stock: {availableStock}
+                                                                                        </span>
+                                                                                    ) : (
+                                                                                        <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-1 rounded-md">
+                                                                                            Stock: {availableStock}
+                                                                                        </span>
+                                                                                    )}
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                        <button
+                                                                            onClick={() => removeMedicine(med.name)}
+                                                                            className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                                                                        >
+                                                                            <Trash2 size={16} />
+                                                                        </button>
                                                                     </div>
-                                                                    <div className="relative group">
-                                                                        <label className="absolute -top-2 left-2 px-1 bg-white text-[9px] font-bold text-slate-400 uppercase">Duration</label>
-                                                                        <input
-                                                                            value={med.duration}
-                                                                            onChange={(e) => updateMedField(med.name, 'duration', e.target.value)}
-                                                                            className="w-20 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-center focus:border-blue-500 outline-none"
-                                                                        />
+
+                                                                    {/* Smart Inputs */}
+                                                                    <div className="flex items-center gap-2 w-full">
+                                                                        <div className="relative group flex-1">
+                                                                            <label className="absolute -top-2 left-2 px-1 bg-white text-[9px] font-bold text-slate-400 uppercase">Dosage</label>
+                                                                            <input
+                                                                                value={med.dosage}
+                                                                                onChange={(e) => updateMedField(med.name, 'dosage', e.target.value)}
+                                                                                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-center focus:border-blue-500 outline-none"
+                                                                            />
+                                                                        </div>
+                                                                        <div className="relative group flex-1">
+                                                                            <label className="absolute -top-2 left-2 px-1 bg-white text-[9px] font-bold text-slate-400 uppercase">Duration</label>
+                                                                            <input
+                                                                                value={med.duration}
+                                                                                onChange={(e) => updateMedField(med.name, 'duration', e.target.value)}
+                                                                                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-center focus:border-blue-500 outline-none"
+                                                                            />
+                                                                        </div>
+                                                                        <div className="relative group flex-1">
+                                                                            <label className="absolute -top-2 left-2 px-1 bg-white text-[9px] font-bold text-slate-400 uppercase">Qty</label>
+                                                                            <input
+                                                                                value={med.count}
+                                                                                onChange={(e) => updateMedField(med.name, 'count', e.target.value)}
+                                                                                className={`w-full px-3 py-2 bg-slate-50 border-2 rounded-lg text-xs font-bold text-center outline-none transition-all ${isInsufficient
+                                                                                        ? 'border-red-400 focus:border-red-500 text-red-700'
+                                                                                        : 'border-slate-200 focus:border-blue-500'
+                                                                                    }`}
+                                                                            />
+                                                                        </div>
                                                                     </div>
-                                                                    <div className="relative group">
-                                                                        <label className="absolute -top-2 left-2 px-1 bg-white text-[9px] font-bold text-slate-400 uppercase">Qty</label>
-                                                                        <input
-                                                                            value={med.count}
-                                                                            onChange={(e) => updateMedField(med.name, 'count', e.target.value)}
-                                                                            className="w-16 px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-xs font-bold text-center focus:border-blue-500 outline-none"
-                                                                        />
-                                                                    </div>
-                                                                    <button
-                                                                        onClick={() => removeMedicine(med.name)}
-                                                                        className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors ml-2"
-                                                                    >
-                                                                        <Trash2 size={16} />
-                                                                    </button>
-                                                                </div>
-                                                            </motion.div>
-                                                        ))}
+
+                                                                    {/* Insufficient Stock Warning */}
+                                                                    {isInsufficient && (
+                                                                        <div className="flex items-start gap-2 p-3 bg-red-100 border border-red-200 rounded-lg">
+                                                                            <AlertCircle size={14} className="text-red-600 mt-0.5 flex-shrink-0" />
+                                                                            <p className="text-[11px] font-bold text-red-800 leading-relaxed">
+                                                                                Insufficient stock! Only <span className="font-extrabold">{availableStock}</span> units available.
+                                                                                Please reduce quantity or choose an alternative medicine.
+                                                                            </p>
+                                                                        </div>
+                                                                    )}
+                                                                </motion.div>
+                                                            );
+                                                        })}
                                                     </AnimatePresence>
                                                 )}
                                             </div>

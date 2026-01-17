@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Pill, FileUp, Plus, Search, ShoppingCart, AlertTriangle,
     Activity, User, Trash2, Printer, X, CheckCircle2,
-    MapPin, Phone, Eye, Calendar, ChevronDown, ListFilter, Clock, Receipt, UploadCloud, FileText
+    MapPin, Phone, Eye, Calendar, ChevronDown, ListFilter, Clock, Receipt, UploadCloud, FileText, Send
 } from 'lucide-react';
 import { Card, Button, Input, Table } from '../components/UI';
 import Pagination from '../components/Pagination';
@@ -105,8 +105,13 @@ const Pharmacy = () => {
     useEffect(() => {
         if (activeTab === 'inventory') fetchStock();
         if (activeTab === 'purchases') fetchRecentImports();
-        if (activeTab === 'pos') fetchPendingVisits();
-    }, [activeTab, page, globalSearch, rowsPerPage, filterSupplier]);
+        if (activeTab === 'pos') {
+            fetchPendingVisits();
+            const interval = setInterval(fetchPendingVisits, 5000); // 5 sec auto refresh
+            return () => clearInterval(interval);
+        }
+    }, [activeTab, page, globalSearch, filterSupplier, rowsPerPage]);
+
 
     // --- API CALLS ---
     const fetchSuppliers = async () => {
@@ -132,9 +137,25 @@ const Pharmacy = () => {
 
     const fetchPendingVisits = async () => {
         try {
-            const { data } = await api.get(`reception/visits/?assigned_role=PHARMACY&status=OPEN`);
+            const { data } = await api.get(`pharmacy/queue/`);
             setPendingVisits(data.results || data || []);
         } catch (err) { console.error("Failed to fetch pharmacy queue", err); }
+    };
+
+    const handleDispense = async (e, visitId) => {
+        e.stopPropagation();
+        if (!window.confirm("Mark this prescription as Dispensed? This will move it to Billing.")) return;
+        try {
+            await api.post(`pharmacy/queue/${visitId}/dispense/`);
+            showToast('success', "Visit dispensed & moved to billing");
+            fetchPendingVisits();
+            if (selectedPatient?.v_id === visitId) {
+                setSelectedPatient(null);
+                setCart([]);
+            }
+        } catch (err) {
+            showToast('error', "Failed to dispense");
+        }
     };
 
     // --- POS Logic ---
@@ -191,7 +212,7 @@ const Pharmacy = () => {
                 qty: item.qty,
                 unit_price: item.selling_price
             })),
-            payment_status: 'PAID'
+            payment_status: 'PENDING'
         };
 
         try {
@@ -204,12 +225,36 @@ const Pharmacy = () => {
                 fetchPendingVisits();
             }
 
-            setShowPrintModal(true);
             setCart([]);
+            setMedSearch(''); // Clear search input
+            setMedResults([]); // Clear results to prevent stale stock display
             setSelectedPatient(null);
             setSelectedDoctor(null);
-            showToast('success', 'Bill generated successfully');
-        } catch (err) { showToast('error', "Checkout failed."); }
+            showToast('success', 'Dispensed! Sent to Billing for payment.');
+        } catch (err) {
+            console.error("Checkout Error:", err);
+            console.error("Error Response Data:", err?.response?.data);
+
+            let errorMsg = "Unknown error";
+            if (err?.response?.data) {
+                const data = err.response.data;
+                // Try different error formats
+                if (typeof data === 'string') {
+                    errorMsg = data;
+                } else if (data.non_field_errors) {
+                    errorMsg = data.non_field_errors[0];
+                } else if (data.detail) {
+                    errorMsg = data.detail;
+                } else if (data.items) {
+                    errorMsg = JSON.stringify(data.items);
+                } else {
+                    errorMsg = JSON.stringify(data).substring(0, 150);
+                }
+            } else {
+                errorMsg = err.message || "Network error";
+            }
+            showToast('error', `Checkout failed: ${errorMsg}`);
+        }
     };
 
     // --- Load Prescription Logic ---
@@ -418,7 +463,18 @@ const Pharmacy = () => {
                                                             <span className="text-[8px] font-black bg-blue-50 text-blue-600 px-1 py-0.5 rounded uppercase">New</span>
                                                         )}
                                                     </div>
-                                                    <p className="text-[9px] text-slate-400 truncate mt-1">Dr. {v.doctor_name || 'Ref'}</p>
+                                                    <div className="flex justify-between items-center mt-1">
+                                                        <p className="text-[9px] text-slate-400 truncate">Dr. {v.doctor_name || 'Ref'}</p>
+                                                        {v.assigned_role === 'LAB' && <span className="text-[8px] font-bold bg-amber-100 text-amber-700 px-1.5 rounded border border-amber-200">AT LAB</span>}
+                                                    </div>
+                                                    <div className="mt-2 flex justify-end">
+                                                        <button
+                                                            onClick={(e) => handleDispense(e, v.id)}
+                                                            className="text-[9px] font-bold bg-emerald-50 text-emerald-600 px-2 py-1 rounded hover:bg-emerald-100 transition-colors uppercase tracking-wider"
+                                                        >
+                                                            Dispense / Done
+                                                        </button>
+                                                    </div>
                                                 </div>
                                             ))
                                         )}
@@ -550,7 +606,7 @@ const Pharmacy = () => {
                                 <div className="space-y-2">
                                     <div className="border-t border-dashed border-slate-300 pt-2 flex justify-between items-end"><span className="text-xs font-black text-slate-900 uppercase tracking-wider">Net Payable</span><span className="text-3xl font-black text-slate-900 leading-none">₹{calculateTotals().net.toFixed(2)}</span></div>
                                 </div>
-                                <button onClick={handleCheckout} disabled={cart.length === 0} className="w-full py-4 bg-slate-900 hover:bg-blue-600 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-2xl font-bold shadow-lg shadow-slate-900/10 transition-all active:scale-[0.98] flex items-center justify-center gap-2 uppercase tracking-widest text-xs"><Printer size={16} /> Print & Checkout</button>
+                                <button onClick={handleCheckout} disabled={cart.length === 0} className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-2xl font-bold shadow-lg shadow-emerald-900/10 transition-all active:scale-[0.98] flex items-center justify-center gap-2 uppercase tracking-widest text-xs"><Send size={16} /> Dispense & Send to Billing</button>
                             </div>
                         </div>
                     </div>

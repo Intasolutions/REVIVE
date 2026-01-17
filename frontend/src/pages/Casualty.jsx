@@ -162,7 +162,7 @@ const TriageModal = ({ visit, onClose, onSave, doctors = [] }) => {
                                     >
                                         <option value="">-- Assign a Doctor --</option>
                                         {doctors.map(doc => (
-                                            <option key={doc.u_id} value={doc.u_id}>Dr. {doc.username} ({doc.specialization || 'General'})</option>
+                                            <option key={doc.id} value={doc.id}>Dr. {doc.username} ({doc.specialization || 'General'})</option>
                                         ))}
                                     </select>
                                 </motion.div>

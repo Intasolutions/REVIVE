@@ -66,7 +66,12 @@ class VisitViewSet(viewsets.ModelViewSet):
     permission_classes = [IsHospitalStaff]
 
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ['status', 'patient', 'doctor', 'assigned_role']
+    filterset_fields = {
+        'status': ['exact', 'in'],
+        'patient': ['exact'], 
+        'doctor': ['exact'],
+        'assigned_role': ['exact']
+    }
     search_fields = ['patient__full_name', 'patient__phone']
     ordering_fields = ['created_at', 'updated_at']
 
@@ -109,7 +114,17 @@ class VisitViewSet(viewsets.ModelViewSet):
         old_doctor = serializer.instance.doctor
         old_role = serializer.instance.assigned_role
         
+        # DEBUG LOGGING
+        print(f"\n=== VISIT UPDATE DEBUG ===")
+        print(f"Visit ID: {serializer.instance.id}")
+        print(f"Request data: {self.request.data}")
+        print(f"Old doctor: {old_doctor}")
+        print(f"Validated data doctor: {serializer.validated_data.get('doctor')}")
+        
         visit = serializer.save()
+        
+        print(f"After save - visit.doctor: {visit.doctor}")
+        print(f"=========================\n")
         
         # Check for Doctor change
         if visit.doctor and visit.doctor != old_doctor:

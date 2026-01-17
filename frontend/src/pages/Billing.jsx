@@ -25,6 +25,7 @@ const Billing = () => {
 
     const [formData, setFormData] = useState({
         patient_name: "",
+        doctor_display_name: "",
         visit: null,
         doctor: "",
         payment_status: "PENDING",
@@ -36,10 +37,17 @@ const Billing = () => {
     const [selectedPatientId, setSelectedPatientId] = useState(null);
 
     useEffect(() => {
-        fetchInvoices();
-        fetchStats();
-        fetchMetadata();
-        fetchPendingVisits();
+        const fetchData = () => {
+            fetchInvoices();
+            fetchStats();
+            fetchPendingVisits();
+        };
+
+        fetchData();
+        fetchMetadata(); // Static data, no need to loop
+
+        const interval = setInterval(fetchData, 5000); // 5 sec refresh
+        return () => clearInterval(interval);
     }, []);
 
     const fetchInvoices = async () => {
@@ -97,32 +105,85 @@ const Billing = () => {
     };
 
     const handleBillNow = async (visit) => {
+        console.log("🔵 handleBillNow - Visit Data:", visit);
         const patId = (visit.patient && typeof visit.patient === 'object') ? visit.patient.id : visit.patient;
         const docId = (visit.doctor && typeof visit.doctor === 'object') ? visit.doctor.id : visit.doctor;
         const patientObj = patients.find(p => p.id === patId);
 
         const patientName = visit.patient_name || (patientObj ? patientObj.full_name : "Unknown");
 
-        setFormData({
-            patient_name: patientName,
-            visit: visit.id || visit.v_id,
-            doctor: docId || "",
-            payment_status: "PENDING",
-            items: [
-                { dept: "PHARMACY", description: "", qty: 1, unit_price: 0, amount: 0, hsn: "", batch: "", gst_percent: 0, expiry: "", dosage: "", duration: "" }
-            ]
-        });
-        setGlobalGst(0); // Reset Global GST
+        // Auto-select doctor if present in visit
+        // Try: 1. docId (FK), 2. visit.doctor (could be ID), 3. Find by name if doctor_name exists
+        let doctorToSet = docId || visit.doctor || "";
 
+        // If we have doctor_name but no ID, try to find the doctor by name
+        if (!doctorToSet && visit.doctor_name) {
+            const foundDoctor = doctors.find(d =>
+                `Dr. ${d.first_name} ${d.last_name}`.toLowerCase() === visit.doctor_name.toLowerCase() ||
+                `${d.first_name} ${d.last_name}`.toLowerCase() === visit.doctor_name.toLowerCase()
+            );
+            if (foundDoctor) doctorToSet = foundDoctor.id;
+        }
+
+        console.log("🔵 Doctor to set:", doctorToSet, "(visit.doctor:", visit.doctor, ", docId:", docId, ", doctor_name:", visit.doctor_name, ")");
+
+        // Check if there's already a pending invoice for this visit
         try {
             const existing = invoices.find(inv => (inv.visit === visit.id || inv.visit === visit.v_id) && inv.payment_status === 'PENDING');
             if (existing) {
+                // Load existing invoice instead of creating new
                 handleEditInvoice(existing);
                 setTimeout(() => handleImportPrescription(patId, visit.id || visit.v_id), 800);
                 return;
             }
-
         } catch (e) { console.error(e); }
+
+        // No existing invoice found, create new form data
+        const newFormData = {
+            patient_name: patientName,
+            doctor_display_name: visit.doctor_name || "Not Assigned",
+            visit: visit.id || visit.v_id,
+            doctor: doctorToSet,
+            payment_status: "PENDING",
+            items: []
+        };
+
+        // Add consultation fee if doctor is assigned
+        if (visit.doctor_name && visit.doctor_name !== "Not Assigned") {
+            const fee = visit.consultation_fee ? parseFloat(visit.consultation_fee) : 500;
+            newFormData.items.push({
+                dept: "CONSULTATION",
+                description: "General Consultation Fee",
+                qty: 1,
+                unit_price: fee,
+                amount: fee,
+                hsn: "",
+                batch: "",
+                gst_percent: 0,
+                expiry: "",
+                dosage: "1-0-1",
+                duration: "5 Days"
+            });
+        }
+
+        // Add empty pharmacy row for manual entry
+        newFormData.items.push({
+            dept: "PHARMACY",
+            description: "",
+            qty: 1,
+            unit_price: 0,
+            amount: 0,
+            hsn: "",
+            batch: "",
+            gst_percent: 0,
+            expiry: "",
+            dosage: "",
+            duration: ""
+        });
+
+        console.log("🟢 Setting formData:", newFormData);
+        setFormData(newFormData);
+        setGlobalGst(0); // Reset Global GST
 
         setSelectedPatientId(patId);
         setShowModal(true);
@@ -141,6 +202,7 @@ const Billing = () => {
 
             let notesData = [];
             let source = "visit";
+            const newItems = []; // Declare here so it's accessible in all blocks
 
             const getResults = (data) => (data && data.results && Array.isArray(data.results)) ? data.results : (Array.isArray(data) ? data : []);
 
@@ -172,8 +234,6 @@ const Billing = () => {
                     console.info(`Using fallback note from ${new Date(lastNote.created_at).toLocaleDateString()}`);
                 }
 
-                const newItems = [];
-
                 if ((!formData.doctor || formData.doctor === "") && lastNote.created_by) {
                     setFormData(prev => ({ ...prev, doctor: lastNote.created_by }));
                 }
@@ -199,6 +259,7 @@ const Billing = () => {
                     });
                 }
 
+                // Import Prescription Items
                 if (presItems.length > 0) {
                     presItems.forEach(p => {
                         const medName = (p.name || "").trim();
@@ -217,31 +278,70 @@ const Billing = () => {
                             expiry: stockItem ? stockItem.expiry_date : "",
                             amount: stockItem ? parseFloat(stockItem.mrp) : 0,
                             dosage: p.dosage || "",
-                            duration: p.duration || ""
+                            duration: p.duration || "",
+                            stock_deducted: false // Prescriptions need stock deduction
                         });
                     });
-
-                    if (newItems.length > 0) {
-                        setFormData(prev => {
-                            const currentItems = prev.items.filter(i => !(i.dept === "PHARMACY" && i.description === "" && i.amount == 0));
-                            const existingNames = new Set(currentItems.map(i => i.description.trim().toLowerCase()));
-                            const uniqueNewItems = newItems.filter(i => !existingNames.has(i.description.trim().toLowerCase()));
-
-                            if (uniqueNewItems.length === 0) return prev;
-
-                            const msg = source === "patient"
-                                ? `Imported ${uniqueNewItems.length} meds from LATEST patient record.`
-                                : `Imported ${uniqueNewItems.length} medicines successfully.`;
-
-                            alert(msg);
-
-                            return {
-                                ...prev,
-                                items: [...currentItems, ...uniqueNewItems]
-                            };
-                        });
-                    }
                 }
+            }
+
+            // === NEW: Import Pharmacy Sales (Already Dispensed) ===
+            // We fetch the visit again to get fresh data including pharmacy_items
+            if (vId) {
+                try {
+                    const { data: visitData } = await api.get(`reception/visits/${vId}/`);
+                    console.log("🟢 Fetched Visit Data for pharmacy items:", visitData);
+                    console.log("🟢 Pharmacy Items Array:", visitData.pharmacy_items);
+
+                    if (visitData.pharmacy_items && Array.isArray(visitData.pharmacy_items)) {
+                        visitData.pharmacy_items.forEach(item => {
+                            newItems.push({
+                                dept: "PHARMACY",
+                                description: item.name,
+                                qty: item.qty,
+                                unit_price: parseFloat(item.unit_price),
+                                amount: parseFloat(item.amount),
+                                hsn: item.hsn,
+                                batch: item.batch,
+                                gst_percent: item.gst,
+                                dosage: item.dosage || "",
+                                duration: item.duration || "",
+                                stock_deducted: true // ALREADY DEDUCTED IN PHARMACY
+                            });
+                        });
+                        if (visitData.pharmacy_items.length > 0) source = "pharmacy";
+                        console.log("🟢 Added", visitData.pharmacy_items.length, "pharmacy items to newItems");
+                    } else {
+                        console.log("⚠️ No pharmacy_items found or not an array");
+                    }
+                } catch (e) {
+                    console.error("❌ Failed to fetch pharmacy items", e);
+                }
+            }
+
+            if (newItems.length > 0) {
+                setFormData(prev => {
+                    const currentItems = prev.items.filter(i => !(i.dept === "PHARMACY" && i.description === "" && i.amount == 0));
+                    const existingNames = new Set(currentItems.map(i => i.description.trim().toLowerCase()));
+                    // Allow duplicates if batches differ, but for now simple check
+                    // Actually, if we import from pharmacy sales, we TRUST it.
+                    // Filter duplicates only if exactly same?
+                    const uniqueNewItems = newItems.filter(i => !existingNames.has(i.description.trim().toLowerCase()));
+
+                    if (uniqueNewItems.length === 0) return prev;
+
+                    let msg = "";
+                    if (source === "pharmacy") msg = `✓ Imported ${uniqueNewItems.length} dispensed medicine(s) from Pharmacy`;
+                    else if (source === "patient") msg = `✓ Imported ${uniqueNewItems.length} medicine(s) from prescription`;
+                    else msg = `✓ Imported ${uniqueNewItems.length} item(s)`;
+
+                    console.log("✅ Import Success:", msg);
+
+                    return {
+                        ...prev,
+                        items: [...currentItems, ...uniqueNewItems]
+                    };
+                });
             }
         } catch (err) {
             console.error("Error importing prescription:", err);
@@ -278,7 +378,7 @@ const Billing = () => {
 
         try {
             if (formData.id) {
-                await api.patch(`billing/invoices/${formData.id}/`, invoiceData);
+                await api.patch(`billing / invoices / ${formData.id}/`, invoiceData);
             } else {
                 await api.post(`billing/invoices/`, invoiceData);
             }
@@ -555,62 +655,17 @@ const Billing = () => {
                                 {/* Top Section */}
                                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6 p-5 bg-slate-50 rounded-xl border border-slate-100">
                                     <div className="space-y-2">
-                                        <label className="text-xs font-semibold uppercase text-slate-500 tracking-wider">Select Patient</label>
-                                        <select
-                                            className="w-full p-2.5 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
-                                            value={selectedPatientId || ""}
-                                            onChange={(e) => {
-                                                const pat = patients.find(p => p.id === e.target.value);
-                                                setFormData({ ...formData, patient_name: pat ? pat.full_name : "" });
-                                                setSelectedPatientId(pat ? pat.id : null);
-                                            }}
-                                        >
-                                            <option value="">Guest / Walk-in</option>
-                                            {patients.map(p => (
-                                                <option key={p.id} value={p.id}>{p.full_name} ({p.phone})</option>
-                                            ))}
-                                        </select>
-                                        <input
-                                            type="text"
-                                            placeholder="Or type Name manually"
-                                            className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-sm mt-2"
-                                            value={formData.patient_name}
-                                            onChange={e => setFormData({ ...formData, patient_name: e.target.value })}
-                                        />
+                                        <label className="text-xs font-semibold uppercase text-slate-500 tracking-wider">Patient Name</label>
+                                        <div className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-slate-900 font-medium">
+                                            {formData.patient_name || "Unknown Patient"}
+                                        </div>
                                     </div>
 
                                     <div className="space-y-2">
                                         <label className="text-xs font-semibold uppercase text-slate-500 tracking-wider">Prescribed By</label>
-                                        <select
-                                            className="w-full p-2.5 bg-white border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none transition-all"
-                                            value={formData.doctor}
-                                            onChange={e => {
-                                                const docId = e.target.value;
-                                                const doc = doctors.find(d => d.id == docId);
-
-                                                let newItems = [...formData.items];
-                                                if (doc) {
-                                                    const fee = parseFloat(doc.consultation_fee) || 0;
-                                                    newItems = newItems.map(item => {
-                                                        const isConsultation = item.dept === 'CONSULTATION' || item.description.includes('Consultation Fee');
-                                                        if (isConsultation) {
-                                                            return {
-                                                                ...item,
-                                                                unit_price: fee,
-                                                                amount: (item.qty * fee).toFixed(2)
-                                                            };
-                                                        }
-                                                        return item;
-                                                    });
-                                                }
-                                                setFormData({ ...formData, doctor: docId, items: newItems });
-                                            }}
-                                        >
-                                            <option value="">Select Doctor</option>
-                                            {doctors.map(d => (
-                                                <option key={d.id} value={d.id}>Dr. {d.first_name} {d.last_name}</option>
-                                            ))}
-                                        </select>
+                                        <div className="w-full p-2.5 bg-white border border-slate-200 rounded-lg text-slate-900 font-medium">
+                                            {formData.doctor_display_name || "Not Assigned"}
+                                        </div>
                                     </div>
 
                                     <div className="flex items-center pt-6">

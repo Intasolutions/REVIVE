@@ -63,6 +63,7 @@ const Laboratory = () => {
     // Forms
     const [resultData, setResultData] = useState({ results: {}, technician_name: 'MUHAMMED NIYAS', specimen: 'BLOOD' });
     const [testForm, setTestForm] = useState({ test_name: '', amount: '' });
+    const [selectedTests, setSelectedTests] = useState([]); // Array of { name, price, isCustom }
     const [stockForm, setStockForm] = useState({ qty: '', cost: '', notes: '' });
     const [inventoryForm, setInventoryForm] = useState({ item_name: '', category: 'REAGENT', qty: 0, cost_per_unit: '', reorder_level: 10 });
     const [visitSearch, setVisitSearch] = useState([]);
@@ -73,8 +74,9 @@ const Laboratory = () => {
         if (activeTab === 'queue') {
             fetchCharges();
             fetchPendingVisits();
-            fetchCharges();
-            fetchPendingVisits();
+            fetchLabTests(); // Ensure catalog is loaded for the modal lookups
+            const interval = setInterval(() => { fetchCharges(); fetchPendingVisits(); }, 5000); // 5 sec refresh
+            return () => clearInterval(interval);
         } else if (activeTab === 'test_catalog') {
             fetchLabTests();
         } else {
@@ -83,12 +85,60 @@ const Laboratory = () => {
     }, [activeTab, page, globalSearch, statusFilter]);
 
     useEffect(() => {
-        if (selectedVisit && selectedVisit.lab_referral_details) {
-            setTestForm(prev => ({ ...prev, test_name: selectedVisit.lab_referral_details }));
-        } else {
-            setTestForm(prev => ({ ...prev, test_name: '' }));
+        if (selectedVisit) {
+            setTestForm({ test_name: '', amount: '' });
+
+            // Auto-select tests from referral details
+            if (selectedVisit.lab_referral_details) {
+                const autoSelected = [];
+                const rawTests = selectedVisit.lab_referral_details.split(', ');
+
+                rawTests.forEach(testName => {
+                    const cleanName = testName.split('/')[0].trim().replace(/\s+/g, ' ');
+                    if (!cleanName) return;
+
+                    // Try to match with catalog
+                    // 1. Exact Name Match (insensitive)
+                    let catalogTest = labTests.find(t =>
+                        t.name.toLowerCase().replace(/[^a-z0-9]/g, '') ===
+                        cleanName.toLowerCase().replace(/[^a-z0-9]/g, '')
+                    );
+
+                    // 2. Fuzzy/Partial Match (First 3 words)
+                    if (!catalogTest) {
+                        const refTokens = cleanName.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).slice(0, 3).join('');
+                        if (refTokens.length > 4) {
+                            catalogTest = labTests.find(t => {
+                                const catTokens = t.name.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).slice(0, 3).join('');
+                                return catTokens === refTokens || catTokens.startsWith(refTokens) || refTokens.startsWith(catTokens);
+                            });
+                        }
+                    }
+
+                    if (catalogTest) {
+                        autoSelected.push({
+                            name: catalogTest.name, // Use catalog name for consistency
+                            price: catalogTest.price,
+                            isCustom: false
+                        });
+                    } else {
+                        // Add as custom test if no match found
+                        autoSelected.push({
+                            name: cleanName,
+                            price: '',
+                            isCustom: true
+                        });
+                    }
+                });
+
+                // Deduplicate by name
+                const uniqueSelected = autoSelected.filter((v, i, a) => a.findIndex(t => (t.name === v.name)) === i);
+                setSelectedTests(uniqueSelected);
+            } else {
+                setSelectedTests([]);
+            }
         }
-    }, [selectedVisit]);
+    }, [selectedVisit, labTests]);
 
     // --- API Calls ---
     const fetchCharges = async () => {
@@ -156,21 +206,28 @@ const Laboratory = () => {
     const handleAddTest = async (e) => {
         e.preventDefault();
         if (!selectedVisit) return showToast('error', "Select a patient first");
+        if (selectedTests.length === 0) return showToast('error', "Select at least one test");
+
         try {
-            await api.post('lab/charges/', {
-                visit: selectedVisit.v_id || selectedVisit.id,
-                test_name: testForm.test_name,
-                amount: testForm.amount,
-                status: 'PENDING'
-            });
+            // Sequential or Parallel? Parallel is faster.
+            await Promise.all(selectedTests.map(test =>
+                api.post('lab/charges/', {
+                    visit: selectedVisit.v_id || selectedVisit.id,
+                    test_name: test.name,
+                    amount: test.price || 0, // Ensure amount is set
+                    status: 'PENDING'
+                })
+            ));
+
             await api.patch(`reception/visits/${selectedVisit.v_id || selectedVisit.id}/`, { status: 'IN_PROGRESS' });
 
             setShowModal(false);
             fetchCharges();
             fetchPendingVisits();
+            setSelectedTests([]); // Clear cart
             setTestForm({ test_name: '', amount: '' });
             setSelectedVisit(null);
-            showToast('success', 'Test request created');
+            showToast('success', `${selectedTests.length} test request(s) created`);
         } catch (err) { showToast('error', "Failed to create test request"); }
     };
 
@@ -638,26 +695,46 @@ const Laboratory = () => {
                                         <p className="text-[10px] font-black text-purple-400 uppercase tracking-widest mb-3">Recommended Tests</p>
                                         <div className="flex flex-wrap gap-2">
                                             {selectedVisit.lab_referral_details.split(', ').map(testName => {
-                                                const cleanName = testName.trim();
-                                                const catalogTest = labTests.find(t => t.name.toLowerCase() === cleanName.toLowerCase());
+                                                const cleanName = testName.split('/')[0].trim().replace(/\s+/g, ' ');
+                                                let catalogTest = labTests.find(t => t.name.toLowerCase().replace(/[^a-z0-9]/g, '') === cleanName.toLowerCase().replace(/[^a-z0-9]/g, ''));
+
+                                                // Ultra-Simple Fallback: Match first 3 words
+                                                if (!catalogTest) {
+                                                    const refTokens = cleanName.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).slice(0, 3).join('');
+                                                    if (refTokens.length > 5) {
+                                                        catalogTest = labTests.find(t => {
+                                                            const catTokens = t.name.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).slice(0, 3).join('');
+                                                            return catTokens === refTokens || catTokens.startsWith(refTokens) || refTokens.startsWith(catTokens);
+                                                        });
+                                                    }
+                                                }
+                                                // Multi-select check
+                                                const currentName = catalogTest ? catalogTest.name : cleanName;
+                                                const isSelected = selectedTests.some(t => t.name === currentName);
+
                                                 return (
                                                     <button
                                                         key={cleanName}
                                                         type="button"
                                                         onClick={() => {
-                                                            setTestForm({
-                                                                test_name: cleanName,
-                                                                amount: catalogTest ? catalogTest.price : ''
-                                                            });
+                                                            if (isSelected) {
+                                                                setSelectedTests(prev => prev.filter(t => t.name !== currentName));
+                                                            } else {
+                                                                setSelectedTests(prev => [...prev, {
+                                                                    name: currentName,
+                                                                    price: catalogTest ? catalogTest.price : '',
+                                                                    isCustom: !catalogTest
+                                                                }]);
+                                                            }
                                                         }}
-                                                        className={`flex items-center gap-2 px-3 py-1.5 border shadow-sm rounded-lg transition-all group ${testForm.test_name.toLowerCase() === cleanName.toLowerCase()
-                                                                ? 'bg-purple-600 border-purple-600 text-white shadow-purple-200'
-                                                                : 'bg-white border-purple-200 text-slate-700 hover:border-purple-400'
+                                                        className={`flex items-center gap-2 px-3 py-1.5 border shadow-sm rounded-lg transition-all group ${isSelected
+                                                            ? 'bg-purple-600 border-purple-600 text-white shadow-purple-200'
+                                                            : 'bg-white border-purple-200 text-slate-700 hover:border-purple-400'
                                                             }`}
                                                     >
-                                                        <div className={`w-2 h-2 rounded-full ${catalogTest ? 'bg-emerald-400' : 'bg-amber-400'} ${testForm.test_name.toLowerCase() === cleanName.toLowerCase() ? 'bg-white' : ''}`} />
+                                                        <div className={`w-2 h-2 rounded-full ${catalogTest ? 'bg-emerald-400' : 'bg-amber-400'} ${isSelected ? 'bg-white' : ''}`} />
                                                         <span className="text-xs font-bold">{cleanName}</span>
-                                                        {testForm.test_name.toLowerCase() === cleanName.toLowerCase() && <CheckCircle2 size={12} />}
+                                                        {isSelected && <CheckCircle2 size={12} />}
                                                     </button>
                                                 );
                                             })}
@@ -665,10 +742,7 @@ const Laboratory = () => {
                                             {/* Add Additional Test Toggle */}
                                             <button
                                                 type="button"
-                                                onClick={() => {
-                                                    setTestForm({ test_name: '', amount: '' });
-                                                    // This effectively deselects recommendation and allows manual search
-                                                }}
+                                                onClick={() => setTestForm({ test_name: '', amount: '' })}
                                                 className={`flex items-center gap-2 px-3 py-1.5 border border-dashed border-slate-300 rounded-lg text-xs font-bold text-slate-500 hover:text-blue-600 hover:border-blue-400 hover:bg-blue-50 transition-all ${!testForm.test_name ? 'bg-blue-50 border-blue-400 text-blue-600' : ''}`}
                                             >
                                                 <Plus size={12} />
@@ -678,85 +752,109 @@ const Laboratory = () => {
                                     </div>
                                 )}
 
-                                <div className="space-y-4">
-                                    {(!selectedVisit?.lab_referral_details || !testForm.test_name || !selectedVisit.lab_referral_details.toLowerCase().includes(testForm.test_name.toLowerCase())) && (
-                                        <div className="space-y-2">
-                                            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Search & Select Test</label>
-                                            <div className="relative">
-                                                <select
-                                                    value={testForm.test_name}
-                                                    onChange={e => {
-                                                        const selected = labTests.find(t => t.name === e.target.value);
-                                                        setTestForm({
-                                                            ...testForm,
-                                                            test_name: e.target.value,
-                                                            amount: selected ? selected.price : ''
-                                                        });
-                                                    }}
-                                                    className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-100 rounded-xl font-bold text-slate-800 focus:border-blue-500 outline-none transition-all appearance-none"
-                                                    required
-                                                >
-                                                    <option value="">Select Test...</option>
-                                                    {Object.entries(groupedTests).map(([category, tests]) => (
-                                                        <optgroup key={category} label={category}>
-                                                            {tests.map(t => (
-                                                                <option key={t.id} value={t.name}>{t.name}</option>
-                                                            ))}
-                                                        </optgroup>
-                                                    ))}
-                                                </select>
-                                                <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
-                                                    <ChevronRight className="rotate-90" size={16} />
+                                {/* Selected Tests List (Cart) */}
+                                {selectedTests.length > 0 && (
+                                    <div className="mb-6 space-y-2">
+                                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Selected Tests</p>
+                                        <div className="bg-slate-50 rounded-xl border border-slate-100 divide-y divide-slate-100">
+                                            {selectedTests.map((test, index) => (
+                                                <div key={index} className="flex justify-between items-center px-4 py-3">
+                                                    <div className="flex items-center gap-2">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setSelectedTests(prev => prev.filter((_, i) => i !== index))}
+                                                            className="text-slate-400 hover:text-red-500 transition-colors"
+                                                        >
+                                                            <X size={14} />
+                                                        </button>
+                                                        <span className="text-sm font-bold text-slate-700">{test.name}</span>
+                                                    </div>
+                                                    <span className="font-mono text-xs font-bold text-slate-900">₹{test.price || '0.00'}</span>
                                                 </div>
+                                            ))}
+                                            <div className="px-4 py-2 bg-slate-100 flex justify-between items-center rounded-b-xl">
+                                                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Total</span>
+                                                <span className="font-mono font-black text-emerald-600 text-lg">
+                                                    ₹{selectedTests.reduce((sum, t) => sum + (parseFloat(t.price) || 0), 0).toFixed(2)}
+                                                </span>
                                             </div>
                                         </div>
-                                    )}
+                                    </div>
+                                )}
 
-                                    {/* Cost Display: Show Standard Price if matched, otherwise show Input */}
+                                <div className="space-y-4 relative">
+                                    <div className="space-y-2">
+                                        <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Search & Select Test</label>
+                                        <div className="relative">
+                                            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                                            <input
+                                                type="text"
+                                                value={testForm.test_name}
+                                                onChange={e => setTestForm({ ...testForm, test_name: e.target.value })}
+                                                placeholder="Type to search..."
+                                                className="w-full pl-11 pr-4 py-3 bg-slate-50 border-none rounded-xl text-sm font-bold text-slate-700 focus:ring-2 focus:ring-purple-500/20 outline-none transition-all placeholder:font-medium placeholder:text-slate-400"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    {/* Dropdown Results */}
                                     {testForm.test_name && (
-                                        <div className="space-y-2">
-                                            {(() => {
-                                                const catalog = labTests.find(t => t.name.toLowerCase() === testForm.test_name.toLowerCase());
-                                                const isStandardPrice = catalog && parseFloat(catalog.price) === parseFloat(testForm.amount || 0);
-
-                                                if (isStandardPrice) {
-                                                    return (
-                                                        <div className="flex justify-between items-center px-4 py-3 bg-slate-50 border border-slate-100 rounded-xl">
-                                                            <div>
-                                                                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Test Cost</p>
-                                                                <p className="font-bold text-slate-700 text-sm">{testForm.test_name}</p>
-                                                            </div>
-                                                            <div className="text-right">
-                                                                <span className="block text-xs font-bold text-emerald-600 uppercase tracking-wide">Standard</span>
-                                                                <span className="font-mono font-black text-slate-900 text-lg">₹{testForm.amount}</span>
-                                                            </div>
-                                                        </div>
-                                                    );
-                                                }
-                                                return (
-                                                    <div className="space-y-2">
-                                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Custom Cost (₹)</label>
-                                                        <Input type="number" placeholder="0.00" value={testForm.amount} onChange={e => setTestForm({ ...testForm, amount: e.target.value })} required className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold" />
-                                                    </div>
-                                                );
-                                            })()}
+                                        <div className="absolute z-50 left-0 right-0 bg-white shadow-xl rounded-xl border border-slate-100 max-h-60 overflow-y-auto mt-2 p-1">
+                                            {labTests.filter(t => t.name.toLowerCase().includes(testForm.test_name.toLowerCase())).map(test => (
+                                                <button
+                                                    key={test.id}
+                                                    type="button"
+                                                    onClick={() => {
+                                                        if (!selectedTests.some(t => t.name === test.name)) {
+                                                            setSelectedTests(prev => [...prev, {
+                                                                name: test.name,
+                                                                price: test.price,
+                                                                isCustom: false
+                                                            }]);
+                                                        }
+                                                        setTestForm({ test_name: '', amount: '' }); // Clear search
+                                                    }}
+                                                    className="w-full text-left px-4 py-3 hover:bg-purple-50 rounded-lg transition-colors flex justify-between items-center group"
+                                                >
+                                                    <span className="text-sm font-bold text-slate-700 group-hover:text-purple-700">{test.name}</span>
+                                                    <span className="text-xs font-medium text-slate-400 group-hover:text-purple-500">₹{test.price}</span>
+                                                </button>
+                                            ))}
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    if (!selectedTests.some(t => t.name === testForm.test_name)) {
+                                                        setSelectedTests(prev => [...prev, {
+                                                            name: testForm.test_name,
+                                                            price: '',
+                                                            isCustom: true
+                                                        }]);
+                                                    }
+                                                    setTestForm({ test_name: '', amount: '' });
+                                                }}
+                                                className="w-full text-left px-4 py-3 hover:bg-emerald-50 rounded-lg transition-colors flex items-center gap-2 text-emerald-600"
+                                            >
+                                                <Plus size={14} />
+                                                <span className="text-sm font-bold">Add "{testForm.test_name}" as custom test</span>
+                                            </button>
                                         </div>
                                     )}
                                 </div>
 
                                 <div className="flex justify-end gap-3 pt-4">
-                                    <Button type="submit" disabled={!testForm.test_name} className="w-full h-12 rounded-xl bg-slate-900 text-white font-bold shadow-lg shadow-slate-900/20 disabled:opacity-50 disabled:cursor-not-allowed">
-                                        {testForm.test_name ? `Create Request for ${testForm.test_name}` : 'Select a Test'}
+                                    <Button type="submit" disabled={selectedTests.length === 0} className="w-full h-12 rounded-xl bg-slate-900 text-white font-bold shadow-lg shadow-slate-900/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                                        {selectedTests.length > 0 ? `Confirm & Create Request (${selectedTests.length})` : 'Select a Test from Search'}
                                     </Button>
                                 </div>
                             </form>
                         </motion.div>
-                    </div>
-                )}
-            </AnimatePresence>
+                    </div >
+                )
+                }
+            </AnimatePresence >
 
             {/* Result Entry Modal - Premium */}
-            <AnimatePresence>
+            < AnimatePresence >
                 {showResultModal && selectedCharge && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-950/40 backdrop-blur-sm no-print">
                         <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-3xl rounded-[2rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
@@ -871,10 +969,10 @@ const Laboratory = () => {
                         </motion.div>
                     </div>
                 )}
-            </AnimatePresence>
+            </AnimatePresence >
 
             {/* Print Modal */}
-            <AnimatePresence>
+            < AnimatePresence >
                 {showPrintModal && printCharge && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-950/40 backdrop-blur-sm print:p-0 print:bg-white print:fixed print:inset-0">
                         <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-3xl rounded-[2rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh] print:shadow-none print:max-h-none print:w-full print:max-w-none print:rounded-none">
@@ -979,74 +1077,76 @@ const Laboratory = () => {
                         </motion.div>
                     </div>
                 )}
-            </AnimatePresence>
+            </AnimatePresence >
 
             {/* Stock Manager Modal */}
-            <AnimatePresence>
-                {stockModal.show && stockModal.item && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-950/40 backdrop-blur-sm no-print">
-                        <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-sm rounded-[2rem] shadow-2xl overflow-hidden flex flex-col">
-                            <div className={`p-6 border-b flex justify-between items-center ${stockModal.type === 'IN' ? 'bg-emerald-50 border-emerald-100' : 'bg-amber-50 border-amber-100'}`}>
-                                <div>
-                                    <h3 className={`text-lg font-black uppercase tracking-tight ${stockModal.type === 'IN' ? 'text-emerald-900' : 'text-amber-900'}`}>
-                                        {stockModal.type === 'IN' ? 'Stock In' : 'Stock Out'}
-                                    </h3>
-                                    <p className="text-sm font-bold opacity-60">{stockModal.item.item_name}</p>
+            < AnimatePresence >
+                {
+                    stockModal.show && stockModal.item && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-950/40 backdrop-blur-sm no-print">
+                            <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-sm rounded-[2rem] shadow-2xl overflow-hidden flex flex-col">
+                                <div className={`p-6 border-b flex justify-between items-center ${stockModal.type === 'IN' ? 'bg-emerald-50 border-emerald-100' : 'bg-amber-50 border-amber-100'}`}>
+                                    <div>
+                                        <h3 className={`text-lg font-black uppercase tracking-tight ${stockModal.type === 'IN' ? 'text-emerald-900' : 'text-amber-900'}`}>
+                                            {stockModal.type === 'IN' ? 'Stock In' : 'Stock Out'}
+                                        </h3>
+                                        <p className="text-sm font-bold opacity-60">{stockModal.item.item_name}</p>
+                                    </div>
+                                    <button onClick={() => setStockModal({ ...stockModal, show: false })} className="p-2 rounded-full hover:bg-white/50 transition-colors"><X size={20} className="opacity-60" /></button>
                                 </div>
-                                <button onClick={() => setStockModal({ ...stockModal, show: false })} className="p-2 rounded-full hover:bg-white/50 transition-colors"><X size={20} className="opacity-60" /></button>
-                            </div>
-                            <form onSubmit={handleStockTransaction} className="p-6 space-y-4">
-                                <div className="space-y-2">
-                                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Quantity</label>
-                                    <Input
-                                        type="number"
-                                        autoFocus
-                                        placeholder="0"
-                                        value={stockForm.qty}
-                                        onChange={e => setStockForm({ ...stockForm, qty: e.target.value })}
-                                        required
-                                        className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold text-lg"
-                                    />
-                                </div>
-
-                                {stockModal.type === 'IN' && (
+                                <form onSubmit={handleStockTransaction} className="p-6 space-y-4">
                                     <div className="space-y-2">
-                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Total Cost (₹)</label>
+                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Quantity</label>
                                         <Input
                                             type="number"
-                                            placeholder="0.00"
-                                            value={stockForm.cost}
-                                            onChange={e => setStockForm({ ...stockForm, cost: e.target.value })}
+                                            autoFocus
+                                            placeholder="0"
+                                            value={stockForm.qty}
+                                            onChange={e => setStockForm({ ...stockForm, qty: e.target.value })}
+                                            required
+                                            className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold text-lg"
+                                        />
+                                    </div>
+
+                                    {stockModal.type === 'IN' && (
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Total Cost (₹)</label>
+                                            <Input
+                                                type="number"
+                                                placeholder="0.00"
+                                                value={stockForm.cost}
+                                                onChange={e => setStockForm({ ...stockForm, cost: e.target.value })}
+                                                className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold"
+                                            />
+                                        </div>
+                                    )}
+
+                                    <div className="space-y-2">
+                                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Notes / Reason</label>
+                                        <Input
+                                            placeholder="Optional..."
+                                            value={stockForm.notes}
+                                            onChange={e => setStockForm({ ...stockForm, notes: e.target.value })}
                                             className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold"
                                         />
                                     </div>
-                                )}
 
-                                <div className="space-y-2">
-                                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Notes / Reason</label>
-                                    <Input
-                                        placeholder="Optional..."
-                                        value={stockForm.notes}
-                                        onChange={e => setStockForm({ ...stockForm, notes: e.target.value })}
-                                        className="bg-slate-50 border-2 border-slate-100 rounded-xl font-bold"
-                                    />
-                                </div>
-
-                                <div className="pt-2">
-                                    <Button
-                                        type="submit"
-                                        className={`w-full h-12 rounded-xl text-white font-bold shadow-lg ${stockModal.type === 'IN' ? 'bg-emerald-600 shadow-emerald-600/20' : 'bg-amber-600 shadow-amber-600/20'}`}
-                                    >
-                                        Update Stock
-                                    </Button>
-                                </div>
-                            </form>
-                        </motion.div>
-                    </div>
-                )}
-            </AnimatePresence>
+                                    <div className="pt-2">
+                                        <Button
+                                            type="submit"
+                                            className={`w-full h-12 rounded-xl text-white font-bold shadow-lg ${stockModal.type === 'IN' ? 'bg-emerald-600 shadow-emerald-600/20' : 'bg-amber-600 shadow-amber-600/20'}`}
+                                        >
+                                            Update Stock
+                                        </Button>
+                                    </div>
+                                </form>
+                            </motion.div>
+                        </div>
+                    )
+                }
+            </AnimatePresence >
             {/* Inventory Creation Modal */}
-            <AnimatePresence>
+            < AnimatePresence >
                 {showInventoryModal && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-slate-950/40 backdrop-blur-sm no-print">
                         <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.9, opacity: 0 }} className="bg-white w-full max-w-lg rounded-[2rem] shadow-2xl overflow-hidden flex flex-col">
@@ -1107,8 +1207,8 @@ const Laboratory = () => {
                         </motion.div>
                     </div>
                 )}
-            </AnimatePresence>
-        </div>
+            </AnimatePresence >
+        </div >
     );
 };
 
