@@ -3,7 +3,8 @@ from rest_framework.response import Response
 from rest_framework import permissions, status
 from django.db.models import Sum, Count, F
 from django.utils import timezone
-from datetime import datetime
+from datetime import datetime, timedelta
+from dateutil.relativedelta import relativedelta
 
 from patients.models import Visit
 from billing.models import Invoice
@@ -210,4 +211,98 @@ class LabInventoryReportView(BaseReportView):
             "end_date": end_date,
             "report_type": "Lab Inventory Logs",
             "details": details
+        })
+
+
+class ProfitAnalyticsView(APIView):
+    """
+    API endpoint for month-over-month profit comparison
+    Returns current month revenue, previous month revenue, and growth percentage
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        # Get current date
+        now = timezone.now()
+        
+        # Calculate current month date range
+        current_month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        current_month_end = now
+        
+        # Calculate previous month date range
+        previous_month_end = current_month_start - timedelta(days=1)
+        previous_month_start = previous_month_end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        
+        # Calculate revenue for current month
+        current_billing = Invoice.objects.filter(
+            created_at__gte=current_month_start,
+            created_at__lte=current_month_end,
+            payment_status='PAID'
+        ).aggregate(total=Sum('total_amount'))['total'] or 0
+        
+        current_pharmacy = PharmacySale.objects.filter(
+            created_at__gte=current_month_start,
+            created_at__lte=current_month_end
+        ).aggregate(total=Sum('total_amount'))['total'] or 0
+        
+        current_lab = LabCharge.objects.filter(
+            created_at__gte=current_month_start,
+            created_at__lte=current_month_end
+        ).aggregate(total=Sum('amount'))['total'] or 0
+        
+        current_total = float(current_billing) + float(current_pharmacy) + float(current_lab)
+        
+        # Calculate revenue for previous month
+        previous_billing = Invoice.objects.filter(
+            created_at__gte=previous_month_start,
+            created_at__lte=previous_month_end,
+            payment_status='PAID'
+        ).aggregate(total=Sum('total_amount'))['total'] or 0
+        
+        previous_pharmacy = PharmacySale.objects.filter(
+            created_at__gte=previous_month_start,
+            created_at__lte=previous_month_end
+        ).aggregate(total=Sum('total_amount'))['total'] or 0
+        
+        previous_lab = LabCharge.objects.filter(
+            created_at__gte=previous_month_start,
+            created_at__lte=previous_month_end
+        ).aggregate(total=Sum('amount'))['total'] or 0
+        
+        previous_total = float(previous_billing) + float(previous_pharmacy) + float(previous_lab)
+        
+        # Calculate growth percentage
+        if previous_total > 0:
+            growth_percentage = ((current_total - previous_total) / previous_total) * 100
+        else:
+            growth_percentage = 100.0 if current_total > 0 else 0.0
+        
+        # Determine if growth is positive or negative
+        is_growth_positive = growth_percentage >= 0
+        
+        return Response({
+            "current_month": {
+                "month_name": current_month_start.strftime("%B %Y"),
+                "start_date": current_month_start.date().isoformat(),
+                "end_date": current_month_end.date().isoformat(),
+                "billing_revenue": float(current_billing),
+                "pharmacy_revenue": float(current_pharmacy),
+                "lab_revenue": float(current_lab),
+                "total_revenue": current_total
+            },
+            "previous_month": {
+                "month_name": previous_month_start.strftime("%B %Y"),
+                "start_date": previous_month_start.date().isoformat(),
+                "end_date": previous_month_end.date().isoformat(),
+                "billing_revenue": float(previous_billing),
+                "pharmacy_revenue": float(previous_pharmacy),
+                "lab_revenue": float(previous_lab),
+                "total_revenue": previous_total
+            },
+            "comparison": {
+                "revenue_difference": current_total - previous_total,
+                "growth_percentage": round(growth_percentage, 2),
+                "is_growth_positive": is_growth_positive,
+                "status": "growth" if is_growth_positive else "decline"
+            }
         })

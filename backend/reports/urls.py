@@ -1,7 +1,8 @@
 from django.urls import path
 from .views import (
     OPDReportView, FinancialReportView, DoctorReportView,
-    PharmacySalesReportView, LabTestReportView, LabInventoryReportView
+    PharmacySalesReportView, LabTestReportView, LabInventoryReportView,
+    ProfitAnalyticsView
 )
 
 urlpatterns = [
@@ -11,4 +12,5 @@ urlpatterns = [
     path('pharmacy/', PharmacySalesReportView.as_view(), name='pharmacy-report'),
     path('lab/', LabTestReportView.as_view(), name='lab-report'),
     path('inventory/', LabInventoryReportView.as_view(), name='inventory-report'),
+    path('profit-analytics/', ProfitAnalyticsView.as_view(), name='profit-analytics'),
 ]
