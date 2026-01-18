@@ -113,7 +113,7 @@ class PharmacySaleSerializer(serializers.ModelSerializer):
     items = PharmacySaleItemSerializer(many=True)
 
     class Meta:
-        model = PharmacySale  # ✅ fixed (removed comma)
+        model = PharmacySale
         fields = '__all__'
         read_only_fields = ['sale_id', 'sale_date', 'created_at', 'updated_at', 'total_amount']
 

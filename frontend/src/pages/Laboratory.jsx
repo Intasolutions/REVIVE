@@ -46,7 +46,7 @@ const Laboratory = () => {
 
     // Test Catalog Form
     const [showTestModal, setShowTestModal] = useState(false);
-    const [testCatalogForm, setTestCatalogForm] = useState({ name: '', category: 'HAEMATOLOGY', price: '', normal_range: '' });
+    const [testCatalogForm, setTestCatalogForm] = useState({ name: '', category: 'HAEMATOLOGY', price: '', normal_range: '', parameters: [] });
 
     // Modals
     const [showModal, setShowModal] = useState(false); // Add Test Modal
@@ -189,7 +189,7 @@ const Laboratory = () => {
             await api.post('lab/tests/', testCatalogForm);
             showToast('success', 'Test Added Successfully');
             setShowTestModal(false);
-            setTestCatalogForm({ name: '', category: 'HAEMATOLOGY', price: '', normal_range: '' });
+            setTestCatalogForm({ name: '', category: 'HAEMATOLOGY', price: '', normal_range: '', parameters: [] });
             fetchLabTests();
         } catch (err) { showToast('error', 'Failed to add test'); }
     };
@@ -233,24 +233,55 @@ const Laboratory = () => {
 
     const handleOpenResultEntry = (charge) => {
         setSelectedCharge(charge);
-        // Default to array format
-        const template = TEST_TEMPLATES[charge.test_name?.toUpperCase()] || [{ name: 'Result', unit: '', normal: '' }];
 
-        // If existing results are object (legacy), convert to array; otherwise use as is or use template
-        let initialResults = [];
-        if (charge.results) {
+        // 1. Check if results already exist (Edit Mode)
+        if (charge.results && (Array.isArray(charge.results) ? charge.results.length > 0 : Object.keys(charge.results).length > 0)) {
+            let initialResults = [];
             if (Array.isArray(charge.results)) {
                 initialResults = charge.results;
             } else {
-                // Legacy object support conversion
                 initialResults = Object.entries(charge.results).map(([key, val]) => ({
                     name: key,
                     ...val
                 }));
             }
+            setResultData({
+                results: initialResults,
+                technician_name: charge.technician_name || 'MUHAMMED NIYAS',
+                specimen: charge.specimen || 'BLOOD'
+            });
+            setShowResultModal(true);
+            return;
+        }
+
+        // 2. New Entry: Check Catalog for Parameters
+        const normalize = str => str?.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const catalogTest = labTests.find(t => normalize(t.name) === normalize(charge.test_name));
+
+        let initialResults = [];
+
+        if (catalogTest && catalogTest.parameters && catalogTest.parameters.length > 0) {
+            // Use DB Parameters
+            initialResults = catalogTest.parameters.map(p => ({
+                name: p.name,
+                unit: p.unit || '',
+                normal: p.normal_range || '',
+                value: ''
+            }));
         } else {
-            // New entry from template
-            initialResults = template.map(t => ({ ...t, value: '' }));
+            // Fallback to Templates or Default
+            const template = TEST_TEMPLATES[charge.test_name?.toUpperCase()];
+            if (template) {
+                initialResults = template.map(t => ({ ...t, value: '' }));
+            } else {
+                // Single Test Fallback
+                initialResults = [{
+                    name: 'Result',
+                    unit: '',
+                    normal: catalogTest?.normal_range || '',
+                    value: ''
+                }];
+            }
         }
 
         setResultData({
@@ -632,9 +663,75 @@ const Laboratory = () => {
                                         <textarea
                                             value={testCatalogForm.normal_range}
                                             onChange={e => setTestCatalogForm({ ...testCatalogForm, normal_range: e.target.value })}
-                                            className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-100 rounded-xl font-bold text-slate-800 focus:border-blue-500 outline-none transition-all min-h-[100px]"
+                                            className="w-full px-4 py-3 bg-slate-50 border-2 border-slate-100 rounded-xl font-bold text-slate-800 focus:border-blue-500 outline-none transition-all min-h-[80px]"
                                             placeholder="e.g. 13.0 - 17.0 g/dL"
                                         />
+                                    </div>
+
+                                    {/* Parameters Section */}
+                                    <div className="space-y-3 pt-2 border-t border-slate-100">
+                                        <div className="flex justify-between items-center">
+                                            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Test Parameters</label>
+                                            <button
+                                                type="button"
+                                                onClick={() => setTestCatalogForm(prev => ({ ...prev, parameters: [...prev.parameters, { name: '', unit: '', normal_range: '' }] }))}
+                                                className="text-xs font-bold text-blue-600 hover:bg-blue-50 px-2 py-1 rounded transition-colors"
+                                            >
+                                                + Add Parameter
+                                            </button>
+                                        </div>
+
+                                        <div className="space-y-2 max-h-[200px] overflow-y-auto pr-1">
+                                            {testCatalogForm.parameters.length === 0 && (
+                                                <div className="p-4 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-center">
+                                                    <p className="text-xs text-slate-400 font-medium">No parameters defined. This will be treated as a single test.</p>
+                                                </div>
+                                            )}
+                                            {testCatalogForm.parameters.map((param, idx) => (
+                                                <div key={idx} className="flex gap-2 items-start animate-in fade-in slide-in-from-bottom-2 duration-300">
+                                                    <Input
+                                                        placeholder="Name"
+                                                        value={param.name}
+                                                        onChange={e => {
+                                                            const newParams = [...testCatalogForm.parameters];
+                                                            newParams[idx].name = e.target.value;
+                                                            setTestCatalogForm({ ...testCatalogForm, parameters: newParams });
+                                                        }}
+                                                        className="flex-1 bg-slate-50 border-slate-200 text-xs h-9"
+                                                    />
+                                                    <Input
+                                                        placeholder="Unit"
+                                                        value={param.unit}
+                                                        onChange={e => {
+                                                            const newParams = [...testCatalogForm.parameters];
+                                                            newParams[idx].unit = e.target.value;
+                                                            setTestCatalogForm({ ...testCatalogForm, parameters: newParams });
+                                                        }}
+                                                        className="w-16 bg-slate-50 border-slate-200 text-xs h-9"
+                                                    />
+                                                    <Input
+                                                        placeholder="Range"
+                                                        value={param.normal_range}
+                                                        onChange={e => {
+                                                            const newParams = [...testCatalogForm.parameters];
+                                                            newParams[idx].normal_range = e.target.value;
+                                                            setTestCatalogForm({ ...testCatalogForm, parameters: newParams });
+                                                        }}
+                                                        className="w-24 bg-slate-50 border-slate-200 text-xs h-9"
+                                                    />
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => {
+                                                            const newParams = testCatalogForm.parameters.filter((_, i) => i !== idx);
+                                                            setTestCatalogForm({ ...testCatalogForm, parameters: newParams });
+                                                        }}
+                                                        className="p-2 text-slate-300 hover:text-red-500 transition-colors"
+                                                    >
+                                                        <X size={14} />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
                                     </div>
                                 </div>
                                 <div className="flex justify-end gap-3 pt-4">
@@ -1030,11 +1127,10 @@ const Laboratory = () => {
                                     <table className="w-full text-left">
                                         <thead>
                                             <tr className="border-b border-slate-200">
-                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/6">Category</th>
-                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/6">Stock Level</th>
-                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/6">Cost/Unit</th>
-                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/6">Reorder Level</th>
-                                                <th className="py-3 text-[10px] font-black text-slate-400 uppercase tracking-widest text-right">Reference Range</th>
+                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/4">Parameter</th>
+                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/4">Observed Value</th>
+                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/4">Unit</th>
+                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/4 text-right">Reference Range</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100">

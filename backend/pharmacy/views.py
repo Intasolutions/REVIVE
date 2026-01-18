@@ -22,7 +22,7 @@ class IsPharmacyOrAdmin(permissions.BasePermission):
     def has_permission(self, request, view):
         if not (request.user and request.user.is_authenticated):
             return False
-        return request.user.is_superuser or getattr(request.user, "role", None) in ["PHARMACY", "ADMIN", "DOCTOR"]
+        return request.user.is_superuser or getattr(request.user, "role", None) in ["PHARMACY", "ADMIN", "DOCTOR", "RECEPTION"]
 
 
 class PharmacyBulkUploadView(APIView):
@@ -282,6 +282,36 @@ class PharmacyStockViewSet(viewsets.ReadOnlyModelViewSet):
 
         return Response(self.get_serializer(stock).data, status=status.HTTP_200_OK)
 
+    @action(detail=False, methods=['get'], url_path='doctor-search')
+    def doctor_search(self, request):
+        """
+        Aggregates stock by medicine name for Doctor's search.
+        Returns: [ { "id": "Name", "name": "Name", "qty_available": TotalQty } ]
+        """
+        query = request.query_params.get('search', '').strip()
+        if len(query) < 2:
+            return Response([])
+
+        from django.db.models import Sum
+        qs = (
+            PharmacyStock.objects
+            .filter(is_deleted=False, name__icontains=query)
+            .values('name')
+            .annotate(total_qty=Sum('qty_available'))
+            .order_by('name')
+        )
+
+        results = []
+        for item in qs:
+            results.append({
+                # Use name as ID to unique key it in frontend lists
+                'id': item['name'],
+                'name': item['name'],
+                'qty_available': item['total_qty'] or 0
+            })
+        
+        return Response(results)
+
 
 class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
     queryset = PurchaseInvoice.objects.all().order_by('-invoice_date')
@@ -302,10 +332,38 @@ class PharmacySaleViewSet(viewsets.ModelViewSet):
     filter_backends = [filters.OrderingFilter]
     ordering_fields = ['sale_date', 'total_amount']
 
+
     def get_serializer_context(self):
         ctx = super().get_serializer_context()
         ctx["request"] = self.request
         return ctx
+
+    @action(detail=False, methods=['get'], url_path='pending_by_patient')
+    def pending_by_patient(self, request):
+        patient_id = request.query_params.get('patient_id')
+        if not patient_id:
+            return Response({"error": "Patient ID required"}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Sales that are PENDING and belong to this patient
+        sales = PharmacySale.objects.filter(patient_id=patient_id, payment_status='PENDING')
+
+        items_list = []
+        for sale in sales:
+            for item in sale.items.all().select_related('med_stock'):
+                items_list.append({
+                    "id": item.id,
+                    "name": item.med_stock.name,
+                    "qty": item.qty,
+                    "unit_price": item.unit_price,
+                    "amount": item.amount,
+                    "hsn": item.med_stock.hsn,
+                    "batch": item.med_stock.batch_no,
+                    "gst": item.med_stock.gst_percent,
+                    "dosage": "",
+                    "duration": ""
+                })
+        
+        return Response(items_list)
 
 
 class PharmacyQueueViewSet(viewsets.ReadOnlyModelViewSet):

@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
-    Pill, FileUp, Plus, Search, ShoppingCart, AlertTriangle,
+    Pill, Plus, Search, ShoppingCart, AlertTriangle,
     Activity, User, Trash2, Printer, X, CheckCircle2,
-    MapPin, Phone, Eye, Calendar, ChevronDown, ListFilter, Clock, Receipt, UploadCloud, FileText, Send
+    Clock, UploadCloud, FileText, Send, Eye
 } from 'lucide-react';
-import { Card, Button, Input, Table } from '../components/UI';
+import { Button, Input } from '../components/UI';
 import Pagination from '../components/Pagination';
 import api from '../api/axios';
 import { useSearch } from '../context/SearchContext';
@@ -60,23 +60,23 @@ const ReceiptTemplate = ({ sale }) => (
 );
 
 const Pharmacy = () => {
-    const { globalSearch } = useSearch();
     const { showToast } = useToast();
 
     // --- STATE ---
     const [activeTab, setActiveTab] = useState('inventory');
     const [loading, setLoading] = useState(false);
 
-    // Inventory
+    // Inventory State
     const [stockData, setStockData] = useState({ results: [], count: 0 });
     const [page, setPage] = useState(1);
     const [rowsPerPage, setRowsPerPage] = useState(50);
     const [selectedStockItem, setSelectedStockItem] = useState(null);
-    const [suppliers, setSuppliers] = useState([]);
+    const [suppliers, setSuppliers] = useState([]); // Initialize as empty array
     const [filterSupplier, setFilterSupplier] = useState('');
 
-    // POS
+    // POS State
     const [cart, setCart] = useState([]);
+    const [gstRate, setGstRate] = useState(12);
     const [patientSearch, setPatientSearch] = useState('');
     const [patients, setPatients] = useState([]);
     const [selectedPatient, setSelectedPatient] = useState(null);
@@ -89,86 +89,109 @@ const Pharmacy = () => {
     const [showPrintModal, setShowPrintModal] = useState(false);
     const [pendingVisits, setPendingVisits] = useState([]);
 
-    // Uploads & Purchases
-    const [selectedImport, setSelectedImport] = useState(null);
-    const [recentImports, setRecentImports] = useState([]);
+    // Purchases State
+    const [fileToUpload, setFileToUpload] = useState(null);
     const [selectedSupplier, setSelectedSupplier] = useState('');
     const [uploadLoading, setUploadLoading] = useState(false);
-    const [fileToUpload, setFileToUpload] = useState(null);
+    const [uploadResult, setUploadResult] = useState(null);
+    const [recentImports, setRecentImports] = useState([]); // Initialize as empty array
+    const [selectedImport, setSelectedImport] = useState(null);
     const [showAddSupplierModal, setShowAddSupplierModal] = useState(false);
     const [newSupplierName, setNewSupplierName] = useState('');
-    const [uploadResult, setUploadResult] = useState(null);
 
-    // --- EFFECTS ---
-    useEffect(() => { fetchSuppliers(); }, []);
+    // --- SAFELY FETCH FUNCTIONS (FIXED) ---
 
-    useEffect(() => {
-        if (activeTab === 'inventory') fetchStock();
-        if (activeTab === 'purchases') fetchRecentImports();
-        if (activeTab === 'pos') {
-            fetchPendingVisits();
-            const interval = setInterval(fetchPendingVisits, 5000); // 5 sec auto refresh
-            return () => clearInterval(interval);
-        }
-    }, [activeTab, page, globalSearch, filterSupplier, rowsPerPage]);
-
-
-    // --- API CALLS ---
-    const fetchSuppliers = async () => {
-        try { const { data } = await api.get('pharmacy/suppliers/'); setSuppliers(data.results || data); } catch (err) { console.error(err); }
-    };
-
-    const fetchStock = async () => {
+    const fetchStock = useCallback(async () => {
         setLoading(true);
         try {
-            let limitParam = rowsPerPage === 'all' ? 1000 : rowsPerPage;
-            let url = `pharmacy/stock/?page=${page}&page_size=${limitParam}`;
-            if (globalSearch) url += `&search=${encodeURIComponent(globalSearch)}`;
+            let url = `pharmacy/stock/?page=${page}`;
+            if (rowsPerPage !== 'all') url += `&page_size=${rowsPerPage}`;
             if (filterSupplier) url += `&supplier=${filterSupplier}`;
+
             const { data } = await api.get(url);
-            setStockData(data || { results: [], count: 0 });
-        } catch (err) { console.error(err); setStockData({ results: [], count: 0 }); }
-        finally { setLoading(false); }
-    };
-
-    const fetchRecentImports = async () => {
-        try { const { data } = await api.get('pharmacy/purchases/'); setRecentImports(data.results || data); } catch (err) { console.error(err); }
-    };
-
-    const fetchPendingVisits = async () => {
-        try {
-            const { data } = await api.get(`pharmacy/queue/`);
-            setPendingVisits(data.results || data || []);
-        } catch (err) { console.error("Failed to fetch pharmacy queue", err); }
-    };
-
-    const handleDispense = async (e, visitId) => {
-        e.stopPropagation();
-        if (!window.confirm("Mark this prescription as Dispensed? This will move it to Billing.")) return;
-        try {
-            await api.post(`pharmacy/queue/${visitId}/dispense/`);
-            showToast('success', "Visit dispensed & moved to billing");
-            fetchPendingVisits();
-            if (selectedPatient?.v_id === visitId) {
-                setSelectedPatient(null);
-                setCart([]);
-            }
+            // Safety check: ensure we have results array
+            setStockData(data.results ? data : { results: data || [], count: data.length || 0 });
         } catch (err) {
-            showToast('error', "Failed to dispense");
+            console.error("Failed to fetch stock", err);
+            setStockData({ results: [], count: 0 });
+        } finally {
+            setLoading(false);
         }
-    };
+    }, [page, rowsPerPage, filterSupplier]);
 
-    // --- POS Logic ---
+    const fetchSuppliers = useCallback(async () => {
+        try {
+            const { data } = await api.get('pharmacy/suppliers/');
+            // FIXED: Check if data is array or object with results
+            const safeSuppliers = Array.isArray(data) ? data : (data.results || []);
+            setSuppliers(safeSuppliers);
+        } catch (err) {
+            console.error("Failed to fetch suppliers", err);
+            setSuppliers([]); // Fallback to avoid crash
+        }
+    }, []);
+
+    const fetchRecentImports = useCallback(async () => {
+        try {
+            const { data } = await api.get('pharmacy/imports/');
+            // FIXED: Check if data is array or object with results
+            const safeImports = Array.isArray(data) ? data : (data.results || []);
+            setRecentImports(safeImports);
+        } catch (err) {
+            console.error("Failed to fetch imports", err);
+            setRecentImports([]); // Fallback
+        }
+    }, []);
+
+    const fetchPendingVisits = useCallback(async () => {
+        try {
+            // FIXED: 'PHARMACY' is an assigned_role, not a status. Status typically remains 'OPEN' until processed.
+            const { data } = await api.get('reception/visits/?assigned_role=PHARMACY&status=OPEN');
+            // FIXED: Check if data is array or object with results
+            const safeVisits = Array.isArray(data) ? data : (data.results || []);
+            setPendingVisits(safeVisits);
+        } catch (err) {
+            console.error("Failed to fetch pending visits", err);
+            setPendingVisits([]);
+        }
+    }, []);
+
+
+    // --- EFFECTS ---
+
+    // 1. Initial Load
+    useEffect(() => {
+        fetchSuppliers();
+        fetchPendingVisits();
+    }, [fetchSuppliers, fetchPendingVisits]);
+
+    // 2. Tab Specific Loads
+    useEffect(() => {
+        if (activeTab === 'inventory') {
+            fetchStock();
+        } else if (activeTab === 'purchases') {
+            fetchRecentImports();
+            fetchSuppliers();
+        } else if (activeTab === 'pos') {
+            fetchPendingVisits();
+        }
+    }, [activeTab, fetchStock, fetchRecentImports, fetchSuppliers, fetchPendingVisits]);
+
+
+    // --- EVENT HANDLERS ---
+
     const searchPatients = async (q) => {
         setPatientSearch(q);
         if (q.length < 2) { setPatients([]); return; }
         try { const { data } = await api.get(`reception/patients/?search=${q}`); setPatients(data.results || data); } catch (err) { }
     };
+
     const searchDoctors = async (q) => {
         setDoctorSearch(q);
         if (q.length < 2) { setDoctors([]); return; }
         try { const { data } = await api.get(`users/management/doctors/?search=${q}`); setDoctors(data); } catch (err) { }
     };
+
     const searchMeds = async (q) => {
         setMedSearch(q);
         if (!q || q.length < 2) { setMedResults([]); return; }
@@ -177,25 +200,21 @@ const Pharmacy = () => {
 
     const addToCart = (med) => {
         const existing = cart.find(item => item.med_id === med.med_id);
+        const reducedPrice = med.mrp - (med.mrp * (gstRate / 100));
+
         if (existing) {
             if (existing.qty < med.qty_available) setCart(cart.map(item => item.med_id === med.med_id ? { ...item, qty: item.qty + 1 } : item));
             else showToast('error', "Out of stock!");
         } else {
-            setCart([...cart, { ...med, qty: 1 }]);
+            setCart([...cart, {
+                ...med,
+                qty: 1,
+                selling_price: reducedPrice,
+                gst_applied: gstRate,
+                original_mrp: med.mrp
+            }]);
         }
         setMedSearch(''); setMedResults([]);
-    };
-
-    const removeFromCart = (id) => setCart(cart.filter(i => i.med_id !== id));
-
-    const updateCartQty = (id, delta) => {
-        setCart(cart.map(item => {
-            if (item.med_id === id) {
-                const newQty = Math.max(1, Math.min(item.qty + delta, item.qty_available));
-                return { ...item, qty: newQty };
-            }
-            return item;
-        }));
     };
 
     const calculateTotals = () => {
@@ -203,10 +222,43 @@ const Pharmacy = () => {
         return { subtotal, net: Math.ceil(subtotal) };
     };
 
+    // --- Recalculate Cart Prices when GST Rate Changes ---
+    useEffect(() => {
+        if (cart.length > 0) {
+            setCart(prevCart => prevCart.map(item => {
+                const mrp = item.original_mrp || item.mrp;
+                const newSellingPrice = mrp - (mrp * (gstRate / 100));
+                return {
+                    ...item,
+                    selling_price: newSellingPrice,
+                    gst_applied: gstRate,
+                    original_mrp: mrp
+                };
+            }));
+        }
+    }, [gstRate]);
+
     const handleCheckout = async () => {
         if (cart.length === 0) return showToast('error', "Cart Empty");
+
+        let visitId = selectedPatient?.v_id || null;
+
+        // Smart Linkage: If no v_id, check if patient is in the Queue
+        if (!visitId && selectedPatient) {
+            const matchInQueue = pendingVisits.find(v =>
+                v.patient === selectedPatient.id ||
+                (v.patient?.id === selectedPatient.id) ||
+                v.patient_name === selectedPatient.full_name
+            );
+            if (matchInQueue) {
+                visitId = matchInQueue.id || matchInQueue.v_id;
+                console.log("Auto-linked to Visit:", visitId);
+            }
+        }
+
         const payload = {
-            visit: selectedPatient?.v_id || null,
+            visit: visitId,
+            patient: selectedPatient?.id || null, // Robust Linkage
             items: cart.map(item => ({
                 med_stock: item.med_id,
                 qty: item.qty,
@@ -219,45 +271,24 @@ const Pharmacy = () => {
             const { data } = await api.post('pharmacy/sales/', payload);
             setLastSale({ ...data, patient: selectedPatient, doctor: selectedDoctor, details: cart });
 
-            // Close visit if prescription based
-            if (selectedPatient?.v_id) {
-                await api.patch(`reception/visits/${selectedPatient.v_id}/`, { status: 'CLOSED' });
+            if (visitId) {
+                await api.patch(`reception/visits/${visitId}/`, { status: 'CLOSED' });
                 fetchPendingVisits();
             }
 
             setCart([]);
-            setMedSearch(''); // Clear search input
-            setMedResults([]); // Clear results to prevent stale stock display
+            setMedSearch('');
+            setMedResults([]);
             setSelectedPatient(null);
             setSelectedDoctor(null);
             showToast('success', 'Dispensed! Sent to Billing for payment.');
         } catch (err) {
             console.error("Checkout Error:", err);
-            console.error("Error Response Data:", err?.response?.data);
-
-            let errorMsg = "Unknown error";
-            if (err?.response?.data) {
-                const data = err.response.data;
-                // Try different error formats
-                if (typeof data === 'string') {
-                    errorMsg = data;
-                } else if (data.non_field_errors) {
-                    errorMsg = data.non_field_errors[0];
-                } else if (data.detail) {
-                    errorMsg = data.detail;
-                } else if (data.items) {
-                    errorMsg = JSON.stringify(data.items);
-                } else {
-                    errorMsg = JSON.stringify(data).substring(0, 150);
-                }
-            } else {
-                errorMsg = err.message || "Network error";
-            }
+            let errorMsg = err.response?.data?.detail || "Transaction failed";
             showToast('error', `Checkout failed: ${errorMsg}`);
         }
     };
 
-    // --- Load Prescription Logic ---
     const loadPrescription = async (visit) => {
         setSelectedPatient({ ...visit.patient, full_name: visit.patient_name, v_id: visit.id });
         if (visit.doctor_name) setSelectedDoctor({ username: visit.doctor_name, u_id: visit.doctor });
@@ -285,14 +316,22 @@ const Pharmacy = () => {
                 const match = results.find(r => r.name.toLowerCase() === name.toLowerCase()) || results[0];
 
                 if (match) {
-                    newCart.push({ ...match, qty: qty });
+                    // Apply GST Reduction Logic here as well
+                    const reducedPrice = match.mrp - (match.mrp * (gstRate / 100));
+                    newCart.push({
+                        ...match,
+                        qty: qty,
+                        selling_price: reducedPrice,
+                        gst_applied: gstRate,
+                        original_mrp: match.mrp
+                    });
                 } else {
                     notFound.push(name);
                 }
             }
             setCart(newCart);
             if (notFound.length > 0) showToast('warning', `Stock missing: ${notFound.join(', ')}`);
-            if (newCart.length > 0) showToast('success', 'Rx loaded');
+            if (newCart.length > 0) showToast('success', 'Rx loaded with GST applied');
         } catch (err) {
             console.error(err);
         } finally {
@@ -300,7 +339,6 @@ const Pharmacy = () => {
         }
     };
 
-    // --- Bulk Upload Logic ---
     const handleFileChange = (e) => {
         if (e.target.files && e.target.files[0]) {
             setFileToUpload(e.target.files[0]);
@@ -319,7 +357,7 @@ const Pharmacy = () => {
             const { data } = await api.post('pharmacy/bulk-upload/', formData, { headers: { 'Content-Type': 'multipart/form-data' } });
             setUploadResult({ success: true, message: 'Upload Successful', details: `${data.items_processed} items processed.`, invoice: data.invoice_no });
             showToast('success', 'Inventory updated successfully');
-            if (activeTab === 'purchases') fetchRecentImports();
+            fetchRecentImports();
             setFileToUpload(null);
         } catch (err) {
             showToast('error', 'Upload failed. Check file format.');
@@ -365,7 +403,10 @@ const Pharmacy = () => {
                             onChange={(e) => setFilterSupplier(e.target.value)}
                         >
                             <option value="">Filter: All Suppliers</option>
-                            {suppliers.map(s => <option key={s.id} value={s.id}>{s.supplier_name}</option>)}
+                            {/* SAFETY CHECK ADDED HERE TO PREVENT CRASH */}
+                            {(Array.isArray(suppliers) ? suppliers : []).map(s => (
+                                <option key={s.id} value={s.id}>{s.supplier_name}</option>
+                            ))}
                         </select>
                     </div>
                 )}
@@ -387,31 +428,39 @@ const Pharmacy = () => {
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-slate-50">
-                                    {(stockData?.results || []).map(s => (
-                                        <tr key={s.med_id} className="hover:bg-slate-50 transition-colors group">
-                                            <td className="px-6 py-3">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold"><Pill size={14} /></div>
-                                                    <div>
-                                                        <p className="font-bold text-slate-900 text-sm">{s.name}</p>
-                                                        <p className="text-[10px] font-bold text-slate-400 uppercase">{s.manufacturer || 'Generic'}</p>
-                                                    </div>
-                                                </div>
-                                            </td>
-                                            <td className="px-6 py-3 font-mono text-xs font-bold text-slate-600">{s.batch_no}</td>
-                                            <td className="px-6 py-3 font-mono text-xs font-bold text-slate-600">{new Date(s.expiry_date).toLocaleDateString(undefined, { month: 'short', year: '2-digit' })}</td>
-                                            <td className="px-6 py-3">
-                                                <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold ${s.qty_available < 10 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
-                                                    {s.qty_available} units
-                                                </span>
-                                            </td>
-                                            <td className="px-6 py-3 font-medium text-sm text-slate-900">₹{s.selling_price}</td>
-                                            <td className="px-6 py-3 text-xs font-bold text-slate-400 line-through">₹{s.mrp}</td>
-                                            <td className="px-6 py-3">
-                                                <button onClick={() => setSelectedStockItem(s)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"><Eye size={16} /></button>
+                                    {(stockData?.results || []).length === 0 ? (
+                                        <tr>
+                                            <td colSpan="7" className="p-8 text-center text-slate-400 font-bold text-sm">
+                                                {loading ? "Loading Inventory..." : "No Items Found"}
                                             </td>
                                         </tr>
-                                    ))}
+                                    ) : (
+                                        (stockData?.results || []).map(s => (
+                                            <tr key={s.med_id} className="hover:bg-slate-50 transition-colors group">
+                                                <td className="px-6 py-3">
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold"><Pill size={14} /></div>
+                                                        <div>
+                                                            <p className="font-bold text-slate-900 text-sm">{s.name}</p>
+                                                            <p className="text-[10px] font-bold text-slate-400 uppercase">{s.manufacturer || 'Generic'}</p>
+                                                        </div>
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-3 font-mono text-xs font-bold text-slate-600">{s.batch_no}</td>
+                                                <td className="px-6 py-3 font-mono text-xs font-bold text-slate-600">{new Date(s.expiry_date).toLocaleDateString(undefined, { month: 'short', year: '2-digit' })}</td>
+                                                <td className="px-6 py-3">
+                                                    <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-bold ${s.qty_available < 10 ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                                                        {s.qty_available} units
+                                                    </span>
+                                                </td>
+                                                <td className="px-6 py-3 font-medium text-sm text-slate-900">₹{s.selling_price}</td>
+                                                <td className="px-6 py-3 text-xs font-bold text-slate-400 line-through">₹{s.mrp}</td>
+                                                <td className="px-6 py-3">
+                                                    <button onClick={() => setSelectedStockItem(s)} className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"><Eye size={16} /></button>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    )}
                                 </tbody>
                             </table>
                         </div>
@@ -433,24 +482,19 @@ const Pharmacy = () => {
                     </>
                 )}
 
-                {/* 2. POS TAB - FIXED ALIGNMENT */}
+                {/* 2. POS TAB */}
                 {activeTab === 'pos' && (
                     <div className="flex h-full divide-x divide-slate-100">
-
-                        {/* --- LEFT SIDE: Action Center + Pending Queue (65%) --- */}
+                        {/* Left Side */}
                         <div className="w-[65%] flex flex-col bg-[#F8FAFC]">
-
-                            {/* Top Bar: Search & Queue */}
                             <div className="flex h-1/3 border-b border-slate-200">
-                                {/* Pending Queue Sidebar */}
+                                {/* Queue */}
                                 <div className="w-1/3 border-r border-slate-100 bg-white flex flex-col">
                                     <div className="p-3 border-b border-slate-100 bg-slate-50/50">
-                                        <h3 className="font-black text-slate-600 uppercase tracking-wider text-[10px] flex items-center gap-2">
-                                            <Clock size={12} /> Pending Rx Queue
-                                        </h3>
+                                        <h3 className="font-black text-slate-600 uppercase tracking-wider text-[10px] flex items-center gap-2"><Clock size={12} /> Pending Rx Queue</h3>
                                     </div>
                                     <div className="flex-1 overflow-y-auto p-2 space-y-2">
-                                        {pendingVisits.length === 0 ? (
+                                        {(Array.isArray(pendingVisits) ? pendingVisits : []).length === 0 ? (
                                             <div className="h-full flex items-center justify-center text-slate-300 text-xs font-bold uppercase">No Pending Rx</div>
                                         ) : (
                                             pendingVisits.map(v => (
@@ -467,65 +511,39 @@ const Pharmacy = () => {
                                                         <p className="text-[9px] text-slate-400 truncate">Dr. {v.doctor_name || 'Ref'}</p>
                                                         {v.assigned_role === 'LAB' && <span className="text-[8px] font-bold bg-amber-100 text-amber-700 px-1.5 rounded border border-amber-200">AT LAB</span>}
                                                     </div>
-                                                    <div className="mt-2 flex justify-end">
-                                                        <button
-                                                            onClick={(e) => handleDispense(e, v.id)}
-                                                            className="text-[9px] font-bold bg-emerald-50 text-emerald-600 px-2 py-1 rounded hover:bg-emerald-100 transition-colors uppercase tracking-wider"
-                                                        >
-                                                            Dispense / Done
-                                                        </button>
-                                                    </div>
                                                 </div>
                                             ))
                                         )}
                                     </div>
                                 </div>
-
-                                {/* Patient/Doctor Inputs */}
+                                {/* Inputs */}
                                 <div className="flex-1 p-6 bg-white space-y-4">
                                     <div className="grid grid-cols-2 gap-4">
                                         <div className="space-y-1 relative">
                                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Patient</label>
                                             <div className="relative group">
                                                 <User className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                                                <input
-                                                    className="w-full pl-9 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:bg-white focus:border-blue-500 outline-none transition-all"
-                                                    placeholder="Search Patient..."
-                                                    value={selectedPatient ? selectedPatient.full_name : patientSearch}
-                                                    onChange={e => { setSelectedPatient(null); searchPatients(e.target.value); }}
-                                                />
+                                                <input className="w-full pl-9 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:bg-white focus:border-blue-500 outline-none transition-all" placeholder="Search Patient..." value={selectedPatient ? selectedPatient.full_name : patientSearch} onChange={e => { setSelectedPatient(null); searchPatients(e.target.value); }} />
                                                 {selectedPatient && <X className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer hover:text-red-500" size={14} onClick={() => { setSelectedPatient(null); setPatientSearch(''); }} />}
-                                                {/* Patient Dropdown */}
                                                 {patients.length > 0 && !selectedPatient && (
                                                     <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-100 rounded-xl shadow-xl z-20 overflow-hidden max-h-40 overflow-y-auto">
                                                         {patients.map(p => (
-                                                            <div key={p.p_id} onClick={() => { setSelectedPatient(p); setPatients([]); setPatientSearch(''); }} className="px-4 py-2 hover:bg-slate-50 cursor-pointer text-xs font-bold text-slate-700 border-b border-slate-50 last:border-0">
-                                                                {p.full_name} <span className="text-slate-400 font-normal">({p.phone})</span>
-                                                            </div>
+                                                            <div key={p.p_id} onClick={() => { setSelectedPatient(p); setPatients([]); setPatientSearch(''); }} className="px-4 py-2 hover:bg-slate-50 cursor-pointer text-xs font-bold text-slate-700 border-b border-slate-50 last:border-0">{p.full_name} <span className="text-slate-400 font-normal">({p.phone})</span></div>
                                                         ))}
                                                     </div>
                                                 )}
                                             </div>
                                         </div>
-
                                         <div className="space-y-1 relative">
                                             <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Doctor</label>
                                             <div className="relative group">
                                                 <Activity className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                                                <input
-                                                    className="w-full pl-9 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:bg-white focus:border-blue-500 outline-none transition-all"
-                                                    placeholder="Assign Doctor..."
-                                                    value={selectedDoctor ? selectedDoctor.username : doctorSearch}
-                                                    onChange={e => { setSelectedDoctor(null); searchDoctors(e.target.value); }}
-                                                />
+                                                <input className="w-full pl-9 pr-8 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold focus:bg-white focus:border-blue-500 outline-none transition-all" placeholder="Assign Doctor..." value={selectedDoctor ? selectedDoctor.username : doctorSearch} onChange={e => { setSelectedDoctor(null); searchDoctors(e.target.value); }} />
                                                 {selectedDoctor && <X className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 cursor-pointer hover:text-red-500" size={14} onClick={() => { setSelectedDoctor(null); setDoctorSearch(''); }} />}
-                                                {/* Doctor Dropdown */}
                                                 {doctors.length > 0 && !selectedDoctor && (
                                                     <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-slate-100 rounded-xl shadow-xl z-20 overflow-hidden max-h-40 overflow-y-auto">
                                                         {doctors.map(d => (
-                                                            <div key={d.u_id} onClick={() => { setSelectedDoctor(d); setDoctors([]); setDoctorSearch(''); }} className="px-4 py-2 hover:bg-slate-50 cursor-pointer text-xs font-bold text-slate-700 border-b border-slate-50 last:border-0">
-                                                                Dr. {d.username}
-                                                            </div>
+                                                            <div key={d.u_id} onClick={() => { setSelectedDoctor(d); setDoctors([]); setDoctorSearch(''); }} className="px-4 py-2 hover:bg-slate-50 cursor-pointer text-xs font-bold text-slate-700 border-b border-slate-50 last:border-0">Dr. {d.username}</div>
                                                         ))}
                                                     </div>
                                                 )}
@@ -534,18 +552,15 @@ const Pharmacy = () => {
                                     </div>
                                 </div>
                             </div>
-
-                            {/* Bottom: Product Search & Grid */}
+                            {/* Search */}
                             <div className="flex-1 flex flex-col overflow-hidden p-6">
                                 <div className="relative mb-6 shrink-0">
                                     <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
-                                    <input
-                                        className="w-full pl-12 pr-4 py-4 bg-white border-2 border-blue-100 rounded-2xl text-lg font-medium text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none shadow-sm"
-                                        placeholder="Scan barcode or type medicine name..."
-                                        value={medSearch}
-                                        onChange={e => searchMeds(e.target.value)}
-                                        autoFocus
-                                    />
+                                    <input className="w-full pl-12 pr-44 py-4 bg-white border-2 border-blue-100 rounded-2xl text-lg font-medium text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none shadow-sm" placeholder="Scan barcode or type medicine name..." value={medSearch} onChange={e => searchMeds(e.target.value)} autoFocus />
+                                    <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                                        <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest hidden xl:block">GST Reduction</span>
+                                        <select className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:border-blue-500" value={gstRate} onChange={(e) => setGstRate(Number(e.target.value))}>{[0, 5, 12, 18, 28].map(r => <option key={r} value={r}>{r}% GST</option>)}</select>
+                                    </div>
                                 </div>
                                 <div className="flex-1 overflow-y-auto">
                                     {medResults.length > 0 ? (
@@ -564,75 +579,56 @@ const Pharmacy = () => {
                                             ))}
                                         </div>
                                     ) : (
-                                        <div className="h-full flex flex-col items-center justify-center text-slate-300">
-                                            <Search size={48} className="mb-4 opacity-50" />
-                                            <p className="font-bold text-sm">Start typing to search inventory...</p>
-                                        </div>
+                                        <div className="h-full flex flex-col items-center justify-center text-slate-300"><Search size={48} className="mb-4 opacity-50" /><p className="font-bold text-sm">Start typing to search inventory...</p></div>
                                     )}
                                 </div>
                             </div>
                         </div>
 
-                        {/* --- RIGHT SIDE: Cart & Billing (35%) --- */}
+                        {/* Right Side Cart */}
                         <div className="w-[35%] bg-white flex flex-col shadow-[-10px_0_40px_-15px_rgba(0,0,0,0.05)] z-20">
                             <div className="p-6 border-b border-slate-100 bg-slate-50 shrink-0">
-                                <div className="flex justify-between items-center mb-4">
-                                    <h2 className="text-sm font-black text-slate-900 uppercase tracking-widest flex items-center gap-2"><ShoppingCart size={16} className="text-blue-600" /> Current Bill</h2>
-                                    <span className="text-xs font-bold text-slate-400">{new Date().toLocaleDateString()}</span>
-                                </div>
+                                <div className="flex justify-between items-center mb-4"><h2 className="text-sm font-black text-slate-900 uppercase tracking-widest flex items-center gap-2"><ShoppingCart size={16} className="text-blue-600" /> Current Bill</h2><span className="text-xs font-bold text-slate-400">{new Date().toLocaleDateString()}</span></div>
                                 {selectedPatient ? (
-                                    <div className="p-3 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
-                                        <div><p className="text-[10px] text-slate-400 font-bold uppercase">Billed To</p><p className="text-sm font-bold text-slate-900">{selectedPatient.full_name}</p></div>
-                                        <button onClick={() => setSelectedPatient(null)} className="text-slate-400 hover:text-red-500"><X size={16} /></button>
-                                    </div>
+                                    <div className="p-3 bg-white border border-slate-200 rounded-xl flex items-center justify-between"><div><p className="text-[10px] text-slate-400 font-bold uppercase">Billed To</p><p className="text-sm font-bold text-slate-900">{selectedPatient.full_name}</p></div><button onClick={() => setSelectedPatient(null)} className="text-slate-400 hover:text-red-500"><X size={16} /></button></div>
                                 ) : <div className="p-3 bg-yellow-50 border border-yellow-100 rounded-xl text-xs font-bold text-yellow-700 text-center">Walk-In Customer (No Name)</div>}
                             </div>
-
                             <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-white">
                                 {cart.length === 0 ? (
                                     <div className="flex flex-col items-center justify-center h-full opacity-40"><ShoppingCart size={40} className="mb-2" /><p className="text-xs font-bold uppercase">Empty Cart</p></div>
                                 ) : cart.map((item, idx) => (
                                     <div key={idx} className="flex justify-between items-center p-3 border-b border-slate-50 last:border-0 hover:bg-slate-50 transition-colors">
                                         <div className="flex-1"><p className="text-sm font-bold text-slate-900 line-clamp-1">{item.name}</p><p className="text-[10px] text-slate-400 font-mono">₹{item.selling_price} x {item.qty}</p></div>
-                                        <div className="flex items-center gap-3">
-                                            <p className="text-sm font-black text-slate-900">₹{(item.selling_price * item.qty).toFixed(2)}</p>
-                                            <button onClick={() => { const newCart = cart.filter(c => c.med_id !== item.med_id); setCart(newCart); }} className="text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={14} /></button>
-                                        </div>
+                                        <div className="flex items-center gap-3"><p className="text-sm font-black text-slate-900">₹{(item.selling_price * item.qty).toFixed(2)}</p><button onClick={() => { const newCart = cart.filter(c => c.med_id !== item.med_id); setCart(newCart); }} className="text-slate-300 hover:text-red-500 transition-colors"><Trash2 size={14} /></button></div>
                                     </div>
                                 ))}
                             </div>
-
                             <div className="p-6 bg-slate-50 border-t border-slate-100 space-y-4 shrink-0">
-                                <div className="space-y-2">
-                                    <div className="border-t border-dashed border-slate-300 pt-2 flex justify-between items-end"><span className="text-xs font-black text-slate-900 uppercase tracking-wider">Net Payable</span><span className="text-3xl font-black text-slate-900 leading-none">₹{calculateTotals().net.toFixed(2)}</span></div>
-                                </div>
+                                <div className="space-y-2"><div className="border-t border-dashed border-slate-300 pt-2 flex justify-between items-end"><span className="text-xs font-black text-slate-900 uppercase tracking-wider">Net Payable</span><span className="text-3xl font-black text-slate-900 leading-none">₹{calculateTotals().net.toFixed(2)}</span></div></div>
                                 <button onClick={handleCheckout} disabled={cart.length === 0} className="w-full py-4 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-2xl font-bold shadow-lg shadow-emerald-900/10 transition-all active:scale-[0.98] flex items-center justify-center gap-2 uppercase tracking-widest text-xs"><Send size={16} /> Dispense & Send to Billing</button>
                             </div>
                         </div>
                     </div>
                 )}
 
-                {/* 3. PURCHASES TAB (Fully Working & Aligned) */}
+                {/* 3. PURCHASES TAB */}
                 {activeTab === 'purchases' && (
                     <div className="flex h-full divide-x divide-slate-100">
-                        {/* Left: Upload Station (35%) */}
+                        {/* Upload */}
                         <div className="w-[35%] p-8 bg-slate-50 flex flex-col justify-center">
                             <div className="bg-white p-8 rounded-[2.5rem] shadow-xl shadow-slate-200/50 border border-slate-100 text-center relative">
-                                <div className="w-20 h-20 bg-blue-50 text-blue-600 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-sm">
-                                    <UploadCloud size={36} />
-                                </div>
+                                <div className="w-20 h-20 bg-blue-50 text-blue-600 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-sm"><UploadCloud size={36} /></div>
                                 <h2 className="text-2xl font-black text-slate-900 mb-2">Import Inventory</h2>
                                 <p className="text-sm text-slate-500 font-medium mb-8">Select supplier and upload CSV invoice.</p>
-
                                 <div className="space-y-4">
                                     <div className="relative text-left">
-                                        <div className="flex justify-between items-end mb-1">
-                                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">1. Select Supplier</label>
-                                            <button onClick={() => setShowAddSupplierModal(true)} className="text-[10px] font-bold text-blue-600 hover:underline flex items-center gap-1 uppercase tracking-wider"><Plus size={10} /> Add New</button>
-                                        </div>
+                                        <div className="flex justify-between items-end mb-1"><label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">1. Select Supplier</label><button onClick={() => setShowAddSupplierModal(true)} className="text-[10px] font-bold text-blue-600 hover:underline flex items-center gap-1 uppercase tracking-wider"><Plus size={10} /> Add New</button></div>
                                         <select className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-bold outline-none focus:border-blue-500" value={selectedSupplier} onChange={(e) => setSelectedSupplier(e.target.value)}>
                                             <option value="">Select a Supplier...</option>
-                                            {suppliers.map(s => <option key={s.id} value={s.supplier_name}>{s.supplier_name}</option>)}
+                                            {/* SAFETY CHECK: Ensure map is only called on arrays */}
+                                            {(Array.isArray(suppliers) ? suppliers : []).map(s => (
+                                                <option key={s.id} value={s.supplier_name}>{s.supplier_name}</option>
+                                            ))}
                                         </select>
                                     </div>
                                     <div className="relative text-left">
@@ -652,46 +648,41 @@ const Pharmacy = () => {
                                 </div>
                             )}
                         </div>
-
-                        {/* Right: History (65%) */}
+                        {/* History */}
                         <div className="w-[65%] flex flex-col bg-white">
-                            <div className="p-6 border-b border-slate-100 flex justify-between items-center">
-                                <h3 className="font-bold text-slate-900 flex items-center gap-2"><Clock size={18} className="text-slate-400" /> Recent Imports history</h3>
-                            </div>
+                            <div className="p-6 border-b border-slate-100 flex justify-between items-center"><h3 className="font-bold text-slate-900 flex items-center gap-2"><Clock size={18} className="text-slate-400" /> Recent Imports history</h3></div>
                             <div className="flex-1 overflow-auto">
                                 <table className="w-full text-left border-collapse">
-                                    <thead className="bg-slate-50 sticky top-0 shadow-sm">
-                                        <tr>{['Invoice #', 'Supplier', 'Date', 'Items', 'Action'].map(h => <th key={h} className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">{h}</th>)}</tr>
-                                    </thead>
+                                    <thead className="bg-slate-50 sticky top-0 shadow-sm"><tr>{['Invoice #', 'Supplier', 'Date', 'Items', 'Action'].map(h => <th key={h} className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest">{h}</th>)}</tr></thead>
                                     <tbody className="divide-y divide-slate-50">
-                                        {recentImports.map(imp => (
-                                            <tr key={imp.id} className="hover:bg-slate-50 transition-colors">
-                                                <td className="px-6 py-4 font-bold text-slate-900">{imp.invoice_no}</td>
-                                                <td className="px-6 py-4 text-sm font-medium text-slate-600">{suppliers.find(s => s.id === imp.supplier)?.supplier_name || 'N/A'}</td>
-                                                <td className="px-6 py-4 font-mono text-xs text-slate-500">{new Date(imp.created_at).toLocaleDateString()}</td>
-                                                <td className="px-6 py-4"><span className="inline-flex items-center px-2.5 py-1 rounded-md bg-slate-100 text-slate-600 text-xs font-bold">{imp.items_detail ? imp.items_detail.length : (imp.items ? imp.items.length : 0)}</span></td>
-                                                <td className="px-6 py-4"><button onClick={() => setSelectedImport(imp)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"><Eye size={18} /></button></td>
-                                            </tr>
-                                        ))}
+                                        {(Array.isArray(recentImports) ? recentImports : []).length === 0 ? (
+                                            <tr><td colSpan="5" className="p-6 text-center text-slate-300 font-bold text-xs">No Imports Found</td></tr>
+                                        ) : (
+                                            (Array.isArray(recentImports) ? recentImports : []).map(imp => (
+                                                <tr key={imp.id} className="hover:bg-slate-50 transition-colors">
+                                                    <td className="px-6 py-4 font-bold text-slate-900">{imp.invoice_no}</td>
+                                                    <td className="px-6 py-4 text-sm font-medium text-slate-600">{suppliers.find(s => s.id === imp.supplier)?.supplier_name || imp.supplier_name || 'N/A'}</td>
+                                                    <td className="px-6 py-4 font-mono text-xs text-slate-500">{new Date(imp.created_at).toLocaleDateString()}</td>
+                                                    <td className="px-6 py-4"><span className="inline-flex items-center px-2.5 py-1 rounded-md bg-slate-100 text-slate-600 text-xs font-bold">{imp.items_detail ? imp.items_detail.length : (imp.items ? imp.items.length : 0)}</span></td>
+                                                    <td className="px-6 py-4"><button onClick={() => setSelectedImport(imp)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all"><Eye size={18} /></button></td>
+                                                </tr>
+                                            ))
+                                        )}
                                     </tbody>
                                 </table>
                             </div>
                         </div>
                     </div>
                 )}
-            </div>
+            </div >
 
-            {/* --- Modals (Keep existing modals for Stock Details, Print, Import, Add Supplier) --- */}
-            {/* ... (Existing Modals Code - View Stock, Print, Import, Add Supplier) ... */}
+            {/* --- Modals --- */}
             <AnimatePresence>
                 {selectedStockItem && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-6 no-print">
                         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setSelectedStockItem(null)} />
                         <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }} className="bg-white w-full max-w-md rounded-[2rem] shadow-2xl relative z-10 p-8">
-                            <div className="flex justify-between items-start mb-6">
-                                <div><h2 className="text-xl font-black text-slate-900">{selectedStockItem.name}</h2><p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">{selectedStockItem.manufacturer}</p></div>
-                                <button onClick={() => setSelectedStockItem(null)} className="p-2 bg-slate-50 rounded-full hover:bg-slate-100"><X size={18} /></button>
-                            </div>
+                            <div className="flex justify-between items-start mb-6"><div><h2 className="text-xl font-black text-slate-900">{selectedStockItem.name}</h2><p className="text-xs font-bold text-slate-400 uppercase tracking-widest mt-1">{selectedStockItem.manufacturer}</p></div><button onClick={() => setSelectedStockItem(null)} className="p-2 bg-slate-50 rounded-full hover:bg-slate-100"><X size={18} /></button></div>
                             <div className="space-y-4">
                                 <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center"><span className="text-xs font-bold text-slate-500 uppercase">Stock Available</span><span className="text-xl font-black text-emerald-600">{selectedStockItem.qty_available}</span></div>
                                 <div className="grid grid-cols-2 gap-4">
@@ -709,10 +700,7 @@ const Pharmacy = () => {
                     <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 no-print">
                         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" />
                         <motion.div initial={{ scale: 0.95 }} animate={{ scale: 1 }} exit={{ scale: 0.95 }} className="bg-white w-full max-w-lg rounded-3xl shadow-2xl relative z-10 overflow-hidden flex flex-col max-h-[90vh]">
-                            <div className="p-4 bg-slate-900 text-white flex justify-between items-center shrink-0">
-                                <h3 className="font-bold text-sm ml-2">Print Receipt</h3>
-                                <div className="flex gap-2"><button onClick={() => window.print()} className="p-2 bg-blue-600 rounded-lg hover:bg-blue-500"><Printer size={18} /></button><button onClick={() => setShowPrintModal(false)} className="p-2 bg-slate-800 rounded-lg hover:bg-slate-700"><X size={18} /></button></div>
-                            </div>
+                            <div className="p-4 bg-slate-900 text-white flex justify-between items-center shrink-0"><h3 className="font-bold text-sm ml-2">Print Receipt</h3><div className="flex gap-2"><button onClick={() => window.print()} className="p-2 bg-blue-600 rounded-lg hover:bg-blue-500"><Printer size={18} /></button><button onClick={() => setShowPrintModal(false)} className="p-2 bg-slate-800 rounded-lg hover:bg-slate-700"><X size={18} /></button></div></div>
                             <div className="flex-1 overflow-y-auto bg-white" id="printable-area"><ReceiptTemplate sale={lastSale} /></div>
                         </motion.div>
                     </div>
@@ -725,10 +713,7 @@ const Pharmacy = () => {
                         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm" onClick={() => setSelectedImport(null)} />
                         <motion.div initial={{ scale: 0.9, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.9, y: 20 }} className="bg-white w-full max-w-4xl rounded-[2rem] shadow-2xl relative z-10 overflow-hidden flex flex-col max-h-[85vh]">
                             <div className="p-8 bg-slate-50 border-b border-slate-100">
-                                <div className="flex justify-between items-center mb-6">
-                                    <div><h2 className="text-2xl font-black text-slate-900">Invoice #{selectedImport.invoice_no || '---'}</h2><p className="text-sm font-bold text-slate-400">Imported on {new Date(selectedImport.created_at).toLocaleDateString()}</p></div>
-                                    <button onClick={() => setSelectedImport(null)} className="p-2 bg-white rounded-full hover:text-red-500 shadow-sm"><X size={20} /></button>
-                                </div>
+                                <div className="flex justify-between items-center mb-6"><div><h2 className="text-2xl font-black text-slate-900">Invoice #{selectedImport.invoice_no || '---'}</h2><p className="text-sm font-bold text-slate-400">Imported on {new Date(selectedImport.created_at).toLocaleDateString()}</p></div><button onClick={() => setSelectedImport(null)} className="p-2 bg-white rounded-full hover:text-red-500 shadow-sm"><X size={20} /></button></div>
                                 <div className="grid grid-cols-3 gap-4">
                                     <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-sm"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Total Value</p><p className="text-2xl font-black text-slate-900">₹{selectedImport.total_amount}</p></div>
                                     <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-sm"><p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Items Count</p><p className="text-2xl font-black text-emerald-600">{selectedImport.items_detail?.length || 0}</p></div>
@@ -759,7 +744,7 @@ const Pharmacy = () => {
                 )}
             </AnimatePresence>
 
-        </div>
+        </div >
     );
 };
 

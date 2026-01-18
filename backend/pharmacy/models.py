@@ -3,7 +3,7 @@ from django.db import models
 from django.conf import settings
 from django.core.validators import MinValueValidator
 from core.models import BaseModel
-from patients.models import Visit
+from patients.models import Visit, Patient
 
 
 class Supplier(BaseModel):
@@ -94,6 +94,15 @@ class PharmacySale(BaseModel):
     PAYMENT_STATUS = (
         ('PAID', 'Paid'),
         ('PENDING', 'Pending'),
+    )
+
+    # Direct Patient Link (Primary fallback)
+    patient = models.ForeignKey(
+        Patient,
+        on_delete=models.SET_NULL, # Don't delete sale if patient deleted? Or CASCADE? SET_NULL safer.
+        null=True,
+        blank=True,
+        related_name='pharmacy_sales'
     )
 
     # Visit sale or walk-in sale (visit = null)

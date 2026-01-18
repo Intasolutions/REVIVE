@@ -80,3 +80,13 @@ class LabTest(BaseModel):
 
     def __str__(self):
         return f"{self.name} ({self.get_category_display()})"
+
+
+class LabTestParameter(BaseModel):
+    test = models.ForeignKey(LabTest, on_delete=models.CASCADE, related_name='parameters')
+    name = models.CharField(max_length=255)
+    unit = models.CharField(max_length=50, blank=True, null=True)
+    normal_range = models.TextField(blank=True, null=True)
+
+    def __str__(self):
+        return f"{self.name} ({self.test.name})"

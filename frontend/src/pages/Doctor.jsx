@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
     Stethoscope, ClipboardList, Send, User, Activity, X, Search,
     Plus, FileText, Trash2, ChevronRight, Clock, Pill,
-    CalendarDays, History, CheckCircle2, AlertCircle, Sparkles
+    CalendarDays, History, CheckCircle2, AlertCircle, Sparkles, FlaskConical
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useSearch } from '../context/SearchContext';
@@ -163,17 +163,32 @@ const Doctor = () => {
                         // Parse Prescription
                         if (existing.prescription) {
                             const meds = [];
-                            Object.entries(existing.prescription).forEach(([name, details]) => {
-                                // details string: "1-0-1 | 5 Days | Qty: 15"
+
+                            // Fetch stocks for restored meds
+                            const medPromises = Object.entries(existing.prescription).map(async ([name, details]) => {
+                                let stock = 0;
+                                try {
+                                    const { data } = await api.get(`/pharmacy/stock/doctor-search/?search=${encodeURIComponent(name)}`);
+                                    const match = (data.results || data).find(m => m.name === name);
+                                    if (match) stock = match.qty_available;
+                                } catch (e) {
+                                    console.error("Stock fetch error", name, e);
+                                }
+
                                 try {
                                     const parts = details.split(' | ');
                                     const dosage = parts[0];
                                     const duration = parts[1];
                                     const count = parts[2].replace('Qty: ', '');
-                                    meds.push({ name, dosage, duration, count });
-                                } catch (e) { console.error("Error parsing med", name, e); }
+                                    return { name, dosage, duration, count, stock };
+                                } catch (e) {
+                                    console.error("Error parsing med", name, e);
+                                    return null;
+                                }
                             });
-                            setSelectedMeds(meds);
+
+                            const resolvedMeds = await Promise.all(medPromises);
+                            setSelectedMeds(resolvedMeds.filter(m => m !== null));
                         }
 
                         // Parse Tests (Comma separated string)
@@ -243,7 +258,7 @@ const Doctor = () => {
             return;
         }
         try {
-            const { data } = await api.get(`/pharmacy/stock/?search=${query}&_t=${Date.now()}`);
+            const { data } = await api.get(`/pharmacy/stock/doctor-search/?search=${query}&_t=${Date.now()}`);
             setMedResults(data.results || data);
         } catch (err) {
             console.error(err);
@@ -735,8 +750,8 @@ const Doctor = () => {
                                                                                 value={med.count}
                                                                                 onChange={(e) => updateMedField(med.name, 'count', e.target.value)}
                                                                                 className={`w-full px-3 py-2 bg-slate-50 border-2 rounded-lg text-xs font-bold text-center outline-none transition-all ${isInsufficient
-                                                                                        ? 'border-red-400 focus:border-red-500 text-red-700'
-                                                                                        : 'border-slate-200 focus:border-blue-500'
+                                                                                    ? 'border-red-400 focus:border-red-500 text-red-700'
+                                                                                    : 'border-slate-200 focus:border-blue-500'
                                                                                     }`}
                                                                             />
                                                                         </div>

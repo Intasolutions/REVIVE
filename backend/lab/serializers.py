@@ -1,13 +1,42 @@
 from rest_framework import serializers
-from .models import LabInventory, LabCharge, LabInventoryLog, LabTest
+from .models import LabInventory, LabCharge, LabInventoryLog, LabTest, LabTestParameter
+
+
+class LabTestParameterSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LabTestParameter
+        fields = ['id', 'name', 'unit', 'normal_range']
 
 
 class LabTestSerializer(serializers.ModelSerializer):
     category_display = serializers.CharField(source='get_category_display', read_only=True)
+    parameters = LabTestParameterSerializer(many=True, required=False)
 
     class Meta:
         model = LabTest
-        fields = ['id', 'name', 'category', 'category_display', 'price', 'normal_range']
+        fields = ['id', 'name', 'category', 'category_display', 'price', 'normal_range', 'parameters']
+
+    def create(self, validated_data):
+        parameters_data = validated_data.pop('parameters', [])
+        lab_test = LabTest.objects.create(**validated_data)
+        for param_data in parameters_data:
+            LabTestParameter.objects.create(test=lab_test, **param_data)
+        return lab_test
+
+    def update(self, instance, validated_data):
+        parameters_data = validated_data.pop('parameters', None)
+        instance.name = validated_data.get('name', instance.name)
+        instance.category = validated_data.get('category', instance.category)
+        instance.price = validated_data.get('price', instance.price)
+        instance.normal_range = validated_data.get('normal_range', instance.normal_range)
+        instance.save()
+
+        if parameters_data is not None:
+            instance.parameters.all().delete()
+            for param_data in parameters_data:
+                LabTestParameter.objects.create(test=instance, **param_data)
+        
+        return instance
 
 
 
