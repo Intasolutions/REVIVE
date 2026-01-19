@@ -22,6 +22,35 @@ const ProtectedRoute = ({ children }) => {
   return <AppLayout>{children}</AppLayout>;
 };
 
+// Role-based route protection
+const RoleProtectedRoute = ({ children, allowedRoles }) => {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return <div className="min-h-screen bg-slate-900 flex items-center justify-center"><div className="w-8 h-8 border-4 border-sky-500/20 border-t-sky-500 rounded-full animate-spin" /></div>;
+  }
+
+  if (!user) {
+    return <Navigate to="/login" />;
+  }
+
+  // Check if user's role is in the allowed roles
+  if (!allowedRoles.includes(user.role)) {
+    // Redirect to a page they do have access to based on their role
+    const roleRedirects = {
+      'RECEPTION': '/reception',
+      'DOCTOR': '/doctor',
+      'PHARMACY': '/pharmacy',
+      'LAB': '/lab',
+      'CASUALTY': '/casualty',
+      'ADMIN': '/'
+    };
+    return <Navigate to={roleRedirects[user.role] || '/'} replace />;
+  }
+
+  return <AppLayout>{children}</AppLayout>;
+};
+
 // Simple Error Boundary Component
 import React from 'react';
 
@@ -75,15 +104,33 @@ function App() {
               <BrowserRouter>
                 <Routes>
                   <Route path="/login" element={<Login />} />
-                  <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-                  <Route path="/reception" element={<ProtectedRoute><Reception /></ProtectedRoute>} />
-                  <Route path="/lab" element={<ProtectedRoute><Laboratory /></ProtectedRoute>} />
-                  <Route path="/casualty" element={<ProtectedRoute><Casualty /></ProtectedRoute>} />
-                  <Route path="/reports" element={<ProtectedRoute><ReportsPage /></ProtectedRoute>} />
-                  <Route path="/manage" element={<ProtectedRoute><ManagePage /></ProtectedRoute>} />
-                  <Route path="/users" element={<ProtectedRoute><UsersPage /></ProtectedRoute>} />
-                  <Route path="/doctor" element={<ProtectedRoute><Doctor /></ProtectedRoute>} />
-                  <Route path="/pharmacy" element={<ProtectedRoute><Pharmacy /></ProtectedRoute>} />
+                  {/* Dashboard - ADMIN only */}
+                  <Route path="/" element={<RoleProtectedRoute allowedRoles={['ADMIN']}><Dashboard /></RoleProtectedRoute>} />
+
+                  {/* Reception - ADMIN, RECEPTION */}
+                  <Route path="/reception" element={<RoleProtectedRoute allowedRoles={['ADMIN', 'RECEPTION']}><Reception /></RoleProtectedRoute>} />
+
+                  {/* Laboratory - ADMIN, LAB */}
+                  <Route path="/lab" element={<RoleProtectedRoute allowedRoles={['ADMIN', 'LAB']}><Laboratory /></RoleProtectedRoute>} />
+
+                  {/* Casualty - ADMIN, CASUALTY */}
+                  <Route path="/casualty" element={<RoleProtectedRoute allowedRoles={['ADMIN', 'CASUALTY']}><Casualty /></RoleProtectedRoute>} />
+
+                  {/* Reports - ADMIN only */}
+                  <Route path="/reports" element={<RoleProtectedRoute allowedRoles={['ADMIN']}><ReportsPage /></RoleProtectedRoute>} />
+
+                  {/* Manage - ADMIN only */}
+                  <Route path="/manage" element={<RoleProtectedRoute allowedRoles={['ADMIN']}><ManagePage /></RoleProtectedRoute>} />
+
+                  {/* Users - ADMIN only */}
+                  <Route path="/users" element={<RoleProtectedRoute allowedRoles={['ADMIN']}><UsersPage /></RoleProtectedRoute>} />
+
+                  {/* Doctor - ADMIN, DOCTOR */}
+                  <Route path="/doctor" element={<RoleProtectedRoute allowedRoles={['ADMIN', 'DOCTOR']}><Doctor /></RoleProtectedRoute>} />
+
+                  {/* Pharmacy - ADMIN, PHARMACY */}
+                  <Route path="/pharmacy" element={<RoleProtectedRoute allowedRoles={['ADMIN', 'PHARMACY']}><Pharmacy /></RoleProtectedRoute>} />
+
                   {/* Default fallback */}
                   <Route path="*" element={<Navigate to="/" />} />
                 </Routes>

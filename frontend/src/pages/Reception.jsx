@@ -10,6 +10,7 @@ import { useSearch } from '../context/SearchContext';
 import Pagination from '../components/Pagination';
 import api from '../api/axios';
 import Billing from './Billing'; // Integrated Billing Module
+import { socket } from '../socket';
 
 // --- Sub-Component: Skeleton Loader (Premium Loading State) ---
 const TableSkeleton = () => (
@@ -86,6 +87,15 @@ const Reception = () => {
         vitals: { temp: '', bp: '', pulse: '', weight: '' }
     });
 
+    // Dashboard Stats
+    const [stats, setStats] = useState({
+        newPatients: 0,
+        activeVisits: 0,
+        todayRevenue: 0,
+        recentVisits: []
+    });
+    const [statsLoading, setStatsLoading] = useState(true);
+
 
     // --- Helper: Show Notification ---
     const showToast = (type, message) => {
@@ -95,12 +105,37 @@ const Reception = () => {
 
     // --- Effects ---
     useEffect(() => {
-        fetchPatients();
+        fetchPatients(true);
+        fetchStats();
     }, [page, globalSearch]);
 
+    // Add 4-second automatic refresh
+    useEffect(() => {
+        const interval = setInterval(() => {
+            fetchPatients(false); // Background refresh without skeleton
+            fetchStats();
+        }, 4000);
+
+        return () => clearInterval(interval);
+    }, [page, globalSearch]);
+
+    useEffect(() => {
+        fetchStats();
+
+        const onVisitUpdate = () => {
+            fetchStats();
+        };
+
+        socket.on('visit_update', onVisitUpdate);
+
+        return () => {
+            socket.off('visit_update', onVisitUpdate);
+        };
+    }, []);
+
     // --- API Functions ---
-    const fetchPatients = async () => {
-        setLoading(true);
+    const fetchPatients = async (showSkeleton = true) => {
+        if (showSkeleton) setLoading(true);
         try {
             const { data } = await api.get(`/reception/patients/?page=${page}${globalSearch ? `&search=${encodeURIComponent(globalSearch)}` : ''}`);
             setPatientsData(data);
@@ -108,8 +143,43 @@ const Reception = () => {
             console.error(err);
             showToast('error', 'Failed to load patients list.');
         } finally {
-            // Artificial delay to show off the skeleton loader (Optional: remove in production)
-            setTimeout(() => setLoading(false), 500);
+            if (showSkeleton) {
+                // Artificial delay to show off the skeleton loader (Optional: remove in production)
+                setTimeout(() => setLoading(false), 500);
+            }
+        }
+    };
+
+    const fetchStats = async () => {
+        setStatsLoading(true);
+        try {
+            const today = new Date().toISOString().split('T')[0];
+
+            // Fetch stats from various endpoints
+            const [patientsRes, visitsRes, invoicesRes] = await Promise.all([
+                api.get(`/reception/patients/?created_at__date=${today}`),
+                api.get(`/reception/visits/?status__in=OPEN,IN_PROGRESS`),
+                api.get(`/billing/invoices/?created_at__date=${today}`)
+            ]);
+
+            const newPatients = patientsRes.data.count || patientsRes.data.results?.length || 0;
+            const activeVisits = visitsRes.data.count || visitsRes.data.results?.length || 0;
+            const todayRevenue = invoicesRes.data.results?.filter(inv => inv.payment_status === 'PAID')
+                .reduce((sum, inv) => sum + parseFloat(inv.total_amount || 0), 0) || 0;
+
+            // Get recent visits
+            const recentVisitsRes = await api.get(`/reception/visits/?ordering=-created_at&limit=5`);
+
+            setStats({
+                newPatients,
+                activeVisits,
+                todayRevenue,
+                recentVisits: recentVisitsRes.data.results || recentVisitsRes.data || []
+            });
+        } catch (err) {
+            console.error('Error fetching stats:', err);
+        } finally {
+            setStatsLoading(false);
         }
     };
 
@@ -280,6 +350,73 @@ const Reception = () => {
                 ) : (
                     /* --- FRONT DESK TAB (Original Reception Content) --- */
                     <div className="h-full overflow-y-auto custom-scrollbar p-6 md:p-8">
+
+                        {/* --- Dashboard Stats Section --- */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+                            {/* New Patients */}
+                            <div className="bg-white rounded-[24px] p-6 border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+                                <div className="flex items-center justify-between mb-4">
+                                    <div className="p-3 bg-blue-50 rounded-xl">
+                                        <UserPlus className="w-6 h-6 text-blue-600" />
+                                    </div>
+                                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Today</span>
+                                </div>
+                                <div>
+                                    <h3 className="text-3xl font-bold text-slate-900 mb-1">
+                                        {statsLoading ? '...' : stats.newPatients}
+                                    </h3>
+                                    <p className="text-sm font-semibold text-slate-500">New Patients</p>
+                                </div>
+                            </div>
+
+                            {/* Active Visits */}
+                            <div className="bg-white rounded-[24px] p-6 border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+                                <div className="flex items-center justify-between mb-4">
+                                    <div className="p-3 bg-orange-50 rounded-xl">
+                                        <Activity className="w-6 h-6 text-orange-600" />
+                                    </div>
+                                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Active</span>
+                                </div>
+                                <div>
+                                    <h3 className="text-3xl font-bold text-slate-900 mb-1">
+                                        {statsLoading ? '...' : stats.activeVisits}
+                                    </h3>
+                                    <p className="text-sm font-semibold text-slate-500">Active Visits</p>
+                                </div>
+                            </div>
+
+                            {/* Today's Revenue */}
+                            <div className="bg-white rounded-[24px] p-6 border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+                                <div className="flex items-center justify-between mb-4">
+                                    <div className="p-3 bg-green-50 rounded-xl">
+                                        <IndianRupee className="w-6 h-6 text-green-600" />
+                                    </div>
+                                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Today</span>
+                                </div>
+                                <div>
+                                    <h3 className="text-3xl font-bold text-slate-900 mb-1">
+                                        {statsLoading ? '...' : `₹${stats.todayRevenue.toLocaleString()}`}
+                                    </h3>
+                                    <p className="text-sm font-semibold text-slate-500">Today's Revenue</p>
+                                </div>
+                            </div>
+
+                            {/* Recent Visits */}
+                            <div className="bg-white rounded-[24px] p-6 border border-slate-100 shadow-sm hover:shadow-md transition-shadow">
+                                <div className="flex items-center justify-between mb-4">
+                                    <div className="p-3 bg-purple-50 rounded-xl">
+                                        <FileText className="w-6 h-6 text-purple-600" />
+                                    </div>
+                                    <span className="text-xs font-bold text-slate-400 uppercase tracking-wider">Latest</span>
+                                </div>
+                                <div>
+                                    <h3 className="text-3xl font-bold text-slate-900 mb-1">
+                                        {statsLoading ? '...' : stats.recentVisits.length}
+                                    </h3>
+                                    <p className="text-sm font-semibold text-slate-500">Recent Visits</p>
+                                </div>
+                            </div>
+                        </div>
 
                         {/* Header Section */}
                         <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-8 animate-in fade-in slide-in-from-top-4 duration-500">

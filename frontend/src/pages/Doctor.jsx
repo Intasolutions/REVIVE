@@ -10,6 +10,7 @@ import { useSearch } from '../context/SearchContext';
 import { useToast } from '../context/ToastContext'; // Using the global toast we made
 import api from '../api/axios';
 import Pagination from '../components/Pagination';
+import { socket } from '../socket';
 
 // --- Components: Skeletons & UI Bits ---
 const QueueSkeleton = () => (
@@ -211,8 +212,8 @@ const Doctor = () => {
     }, [selectedVisit]);
 
     // --- API Interactions ---
-    const fetchQueue = async () => {
-        setLoading(true);
+    const fetchQueue = async (showLoading = true) => {
+        if (showLoading) setLoading(true);
         try {
             const doctorFilter = user?.role === 'DOCTOR' ? `&doctor=${user.u_id}` : '';
             const { data } = await api.get(`/reception/visits/?status__in=OPEN,IN_PROGRESS${doctorFilter}&page=${page}${globalSearch ? `&search=${encodeURIComponent(globalSearch)}` : ''}`);
@@ -222,15 +223,41 @@ const Doctor = () => {
         } catch (err) {
             showToast('error', 'Could not refresh patient queue');
         } finally {
-            setLoading(false);
+            if (showLoading) setLoading(false);
         }
     };
 
     // Auto-refresh Queue
     useEffect(() => {
         if (user) {
-            const interval = setInterval(fetchQueue, 5000); // 5 seconds
-            return () => clearInterval(interval);
+            // Polling fallback - 4 seconds for consistency
+            const interval = setInterval(() => {
+                fetchQueue(false);
+            }, 4000);
+
+            // Socket Listeners
+            const onVisitUpdate = (data) => {
+                console.log("Socket: Visit Update", data);
+                fetchQueue(false); // Background refresh
+                if (data.status === 'OPEN') showToast('info', 'Patient queue updated');
+            };
+
+            const onLabUpdate = (data) => {
+                console.log("Socket: Lab Update", data);
+                if (data.status === 'COMPLETED') {
+                    showToast('success', `Lab results ready (ID: ${data.visit_id.slice(0, 8)})`);
+                    fetchQueue(false);
+                }
+            };
+
+            socket.on('visit_update', onVisitUpdate);
+            socket.on('lab_update', onLabUpdate);
+
+            return () => {
+                clearInterval(interval);
+                socket.off('visit_update', onVisitUpdate);
+                socket.off('lab_update', onLabUpdate);
+            };
         }
     }, [user, page, globalSearch]);
 
@@ -272,7 +299,9 @@ const Doctor = () => {
                 dosage: '1-0-1',
                 duration: '5 Days',
                 count: '15',
-                stock: med.qty_available
+                stock: med.qty_available,
+                mrp: med.mrp,
+                tps: med.tablets_per_strip || 1
             }]);
             showToast('success', `${med.name} added to prescription`);
         }
@@ -661,7 +690,10 @@ const Doctor = () => {
                                                                         className="px-4 py-3 hover:bg-emerald-50 cursor-pointer flex justify-between items-center group"
                                                                     >
                                                                         <span className="text-sm font-bold text-slate-700 group-hover:text-emerald-700">{med.name}</span>
-                                                                        <span className="text-[10px] font-bold bg-slate-100 text-slate-500 px-2 py-1 rounded-md">Stock: {med.qty_available}</span>
+                                                                        <div className="flex flex-col items-end">
+                                                                            <span className="text-[10px] font-bold bg-slate-100 text-slate-500 px-2 py-0.5 rounded-md mb-1">Stock: {med.qty_available} Tabs</span>
+                                                                            <span className="text-[10px] font-black text-emerald-600">₹{(med.mrp / (med.tablets_per_strip || 1)).toFixed(2)}/Tab</span>
+                                                                        </div>
                                                                     </div>
                                                                 ))}
                                                             </motion.div>
@@ -704,20 +736,26 @@ const Doctor = () => {
                                                                                     {isInsufficient ? (
                                                                                         <span className="text-[10px] font-bold bg-red-100 text-red-700 px-2 py-1 rounded-md flex items-center gap-1">
                                                                                             <AlertCircle size={12} />
-                                                                                            Only {availableStock} in stock
+                                                                                            Only {availableStock} tablets in stock
                                                                                         </span>
                                                                                     ) : isLowStock ? (
                                                                                         <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-1 rounded-md">
-                                                                                            Low Stock: {availableStock}
+                                                                                            Low Stock: {availableStock} Tabs
                                                                                         </span>
                                                                                     ) : (
                                                                                         <span className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-1 rounded-md">
-                                                                                            Stock: {availableStock}
+                                                                                            Stock: {availableStock} Tabs
                                                                                         </span>
                                                                                     )}
                                                                                 </div>
                                                                             </div>
                                                                         </div>
+                                                                        {med.mrp && (
+                                                                            <div className="flex flex-col items-end mr-4">
+                                                                                <span className="text-[10px] font-bold text-slate-400">Rate: ₹{(med.mrp / (med.tps || 1)).toFixed(2)}/Tab</span>
+                                                                                <span className="text-xs font-black text-slate-900">Est: ₹{(((med.mrp / (med.tps || 1)) * prescribedQty) || 0).toFixed(2)}</span>
+                                                                            </div>
+                                                                        )}
                                                                         <button
                                                                             onClick={() => removeMedicine(med.name)}
                                                                             className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
@@ -762,7 +800,7 @@ const Doctor = () => {
                                                                         <div className="flex items-start gap-2 p-3 bg-red-100 border border-red-200 rounded-lg">
                                                                             <AlertCircle size={14} className="text-red-600 mt-0.5 flex-shrink-0" />
                                                                             <p className="text-[11px] font-bold text-red-800 leading-relaxed">
-                                                                                Insufficient stock! Only <span className="font-extrabold">{availableStock}</span> units available.
+                                                                                Insufficient stock! Only <span className="font-extrabold">{availableStock}</span> tablets available.
                                                                                 Please reduce quantity or choose an alternative medicine.
                                                                             </p>
                                                                         </div>

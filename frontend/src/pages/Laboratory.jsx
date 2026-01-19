@@ -12,6 +12,7 @@ import api from '../api/axios';
 import { useSearch } from '../context/SearchContext';
 import { useToast } from '../context/ToastContext';
 import { useDialog } from '../context/DialogContext';
+import { socket } from '../socket';
 
 // --- Configuration ---
 const TEST_TEMPLATES = {
@@ -72,11 +73,37 @@ const Laboratory = () => {
     // --- Effects ---
     useEffect(() => {
         if (activeTab === 'queue') {
-            fetchCharges();
-            fetchPendingVisits();
-            fetchLabTests(); // Ensure catalog is loaded for the modal lookups
-            const interval = setInterval(() => { fetchCharges(); fetchPendingVisits(); }, 5000); // 5 sec refresh
-            return () => clearInterval(interval);
+            fetchCharges(true);
+            fetchPendingVisits(false);
+            fetchLabTests();
+
+            // Polling - 4 seconds
+            const interval = setInterval(() => {
+                fetchCharges(false);
+                fetchPendingVisits(false);
+            }, 4000);
+
+            // Socket Listeners
+            const onDoctorUpdate = (data) => {
+                console.log("Socket: Doctor Update", data);
+                if (data.has_lab) {
+                    fetchPendingVisits(false);
+                    showToast('info', 'New lab request received');
+                }
+            };
+
+            const onLabUpdate = () => {
+                fetchCharges(false);
+            }
+
+            socket.on('doctor_notes_update', onDoctorUpdate);
+            socket.on('lab_update', onLabUpdate);
+
+            return () => {
+                clearInterval(interval);
+                socket.off('doctor_notes_update', onDoctorUpdate);
+                socket.off('lab_update', onLabUpdate);
+            };
         } else if (activeTab === 'test_catalog') {
             fetchLabTests();
         } else {
@@ -141,21 +168,23 @@ const Laboratory = () => {
     }, [selectedVisit, labTests]);
 
     // --- API Calls ---
-    const fetchCharges = async () => {
-        setLoading(true);
+    const fetchCharges = async (showLoading = true) => {
+        if (showLoading) setLoading(true);
         try {
             const statusQuery = statusFilter !== 'ALL' ? `&status=${statusFilter}` : '';
             const { data } = await api.get(`lab/charges/?page=${page}&search=${globalSearch || ''}${statusQuery}`);
             setChargesData(data || { results: [], count: 0 });
         } catch (err) { showToast('error', 'Failed to fetch lab queue'); }
-        finally { setLoading(false); }
+        finally { if (showLoading) setLoading(false); }
     };
 
-    const fetchPendingVisits = async () => {
+    const fetchPendingVisits = async (showLoading = false) => {
+        if (showLoading) setLoading(true); // Usually not needed for secondary fetches but keeping for flexibility
         try {
             const { data } = await api.get(`reception/visits/?assigned_role=LAB&status=OPEN`);
             setPendingVisits(data.results || data || []);
         } catch (err) { console.error(err); }
+        finally { if (showLoading) setLoading(false); }
     };
 
     const fetchInventory = async () => {
@@ -670,7 +699,7 @@ const Laboratory = () => {
 
                                     {/* Parameters Section */}
                                     <div className="space-y-3 pt-2 border-t border-slate-100">
-                                        <div className="flex justify-between items-center">
+                                        <div className="flex justify-between items-center mb-1">
                                             <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Test Parameters</label>
                                             <button
                                                 type="button"
@@ -681,6 +710,15 @@ const Laboratory = () => {
                                             </button>
                                         </div>
 
+                                        {testCatalogForm.parameters.length > 0 && (
+                                            <div className="grid grid-cols-[1fr,60px,100px,30px] gap-2 px-2 text-[10px] font-black text-slate-400 uppercase tracking-widest">
+                                                <span>Parameter Name</span>
+                                                <span>Unit</span>
+                                                <span>Normal Range</span>
+                                                <span></span>
+                                            </div>
+                                        )}
+
                                         <div className="space-y-2 max-h-[200px] overflow-y-auto pr-1">
                                             {testCatalogForm.parameters.length === 0 && (
                                                 <div className="p-4 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-center">
@@ -690,7 +728,7 @@ const Laboratory = () => {
                                             {testCatalogForm.parameters.map((param, idx) => (
                                                 <div key={idx} className="flex gap-2 items-start animate-in fade-in slide-in-from-bottom-2 duration-300">
                                                     <Input
-                                                        placeholder="Name"
+                                                        placeholder="e.g. Hemoglobin"
                                                         value={param.name}
                                                         onChange={e => {
                                                             const newParams = [...testCatalogForm.parameters];
@@ -700,7 +738,7 @@ const Laboratory = () => {
                                                         className="flex-1 bg-slate-50 border-slate-200 text-xs h-9"
                                                     />
                                                     <Input
-                                                        placeholder="Unit"
+                                                        placeholder="mg/dL"
                                                         value={param.unit}
                                                         onChange={e => {
                                                             const newParams = [...testCatalogForm.parameters];
@@ -710,7 +748,7 @@ const Laboratory = () => {
                                                         className="w-16 bg-slate-50 border-slate-200 text-xs h-9"
                                                     />
                                                     <Input
-                                                        placeholder="Range"
+                                                        placeholder="e.g. 12-16"
                                                         value={param.normal_range}
                                                         onChange={e => {
                                                             const newParams = [...testCatalogForm.parameters];
@@ -965,10 +1003,10 @@ const Laboratory = () => {
 
                             <form onSubmit={handleSubmitResults} className="flex-1 overflow-y-auto p-8 space-y-8">
                                 <div className="grid grid-cols-12 gap-4 text-xs font-black text-slate-400 uppercase tracking-widest px-2 border-b border-slate-100 pb-2">
-                                    <span className="col-span-4">Parameter</span>
-                                    <span className="col-span-4">Observed Value</span>
+                                    <span className="col-span-4">Parameter Name</span>
+                                    <span className="col-span-4">Result Value</span>
                                     <span className="col-span-2">Unit</span>
-                                    <span className="col-span-2 text-right">Reference</span>
+                                    <span className="col-span-2 text-right">Normal Range</span>
                                 </div>
 
                                 <div className="space-y-3">
@@ -1127,10 +1165,10 @@ const Laboratory = () => {
                                     <table className="w-full text-left">
                                         <thead>
                                             <tr className="border-b border-slate-200">
-                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/4">Parameter</th>
-                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/4">Observed Value</th>
+                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/4">Parameter Name</th>
+                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/4">Result Value</th>
                                                 <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/4">Unit</th>
-                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/4 text-right">Reference Range</th>
+                                                <th className="p-4 text-[10px] font-black text-slate-400 uppercase tracking-widest w-1/4 text-right">Normal Range</th>
                                             </tr>
                                         </thead>
                                         <tbody className="divide-y divide-slate-100">

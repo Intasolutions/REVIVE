@@ -9,24 +9,8 @@ import api from "../api/axios";
 import { motion, AnimatePresence } from "framer-motion";
 import { useToast } from "../context/ToastContext";
 import { useDialog } from "../context/DialogContext";
+import { socket } from "../socket";
 
-// --- 1. Premium Tooltip Component (Fixed) ---
-const ActionTooltip = ({ text, children, variant = 'dark' }) => (
-    <div className="group relative flex items-center justify-center">
-        {children}
-        {/* Tooltip Popup */}
-        <div className="absolute bottom-full mb-2 hidden group-hover:flex flex-col items-center z-[100] whitespace-nowrap animate-in fade-in zoom-in-95 duration-200">
-            <span className={`
-                relative z-50 px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider rounded-lg shadow-xl
-                ${variant === 'danger' ? 'bg-rose-600 text-white' : 'bg-slate-900 text-white'}
-            `}>
-                {text}
-                {/* Tiny arrow pointing down */}
-                <span className={`absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 rotate-45 ${variant === 'danger' ? 'bg-rose-600' : 'bg-slate-900'}`}></span>
-            </span>
-        </div>
-    </div>
-);
 
 const Billing = () => {
     const { showToast } = useToast();
@@ -39,6 +23,8 @@ const Billing = () => {
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [searchTerm, setSearchTerm] = useState("");
+    const [page, setPage] = useState(1);
+    const globalSearch = searchTerm; // Map searchTerm to globalSearch for compatibility with the copied logic
 
     // --- Forms ---
     const [doctors, setDoctors] = useState([]);
@@ -57,38 +43,77 @@ const Billing = () => {
 
     // --- Effects ---
     useEffect(() => {
-        const fetchData = () => {
-            fetchInvoices();
-            fetchStats();
-            fetchPendingVisits();
+        const fetchData = async () => {
+            await Promise.all([
+                fetchInvoices(true),
+                fetchStats(false),
+                fetchPendingVisits(false)
+            ]);
         };
         fetchData();
-        fetchMetadata();
-        const interval = setInterval(fetchData, 10000);
-        return () => clearInterval(interval);
-    }, []);
+        fetchMetadata(); // Call fetchMetadata once on mount
+
+        // Polling - 4 seconds
+        const interval = setInterval(() => {
+            fetchInvoices(false);
+            fetchStats(false);
+            fetchPendingVisits(false);
+        }, 4000);
+
+        // Socket Listener
+        const onPharmacySale = (data) => {
+            console.log("Socket: Pharmacy Sale Update", data);
+            fetchPendingVisits(false);
+            fetchStats(false);
+            showToast('info', 'New billing entry available');
+        };
+
+        socket.on('pharmacy_sale_update', onPharmacySale);
+
+        return () => {
+            clearInterval(interval);
+            socket.off('pharmacy_sale_update', onPharmacySale);
+        };
+    }, [page, globalSearch]);
 
     // --- API Calls ---
-    const fetchInvoices = async () => {
+    const fetchInvoices = async (showLoading = true) => {
+        if (showLoading) setLoading(true);
         try {
-            const res = await api.get(`billing/invoices/`);
-            setInvoices(res.data.results || (Array.isArray(res.data) ? res.data : []));
-            setLoading(false);
-        } catch (err) { console.error(err); setLoading(false); }
+            const { data } = await api.get(`/billing/invoices/?page=${page}${globalSearch ? `&search=${encodeURIComponent(globalSearch)}` : ''}`);
+            setInvoices(data.results || (Array.isArray(data) ? data : []));
+        } catch (err) {
+            showToast('error', 'Failed to load invoices.');
+        } finally {
+            if (showLoading) {
+                setTimeout(() => setLoading(false), 500);
+            }
+        }
     };
 
-    const fetchPendingVisits = async () => {
+    const fetchPendingVisits = async (showLoading = false) => {
+        if (showLoading) setLoading(true);
         try {
-            const res = await api.get(`billing/invoices/pending_visits/`);
-            setPendingVisits(Array.isArray(res.data) ? res.data : []);
-        } catch (err) { console.error(err); }
+            // Visits where assigned_role is BILLING and status is OPEN/IN_PROGRESS
+            const { data } = await api.get('/reception/visits/?assigned_role=BILLING&status=OPEN');
+            setPendingVisits(data.results || data || []);
+        } catch (err) {
+            console.error('Failed to load pending bills', err);
+        } finally {
+            if (showLoading) setLoading(false);
+        }
     };
 
-    const fetchStats = async () => {
+    const fetchStats = async (showLoading = false) => {
+        if (showLoading) setLoading(true);
         try {
-            const res = await api.get(`billing/invoices/stats/`);
-            setStats(res.data);
-        } catch (err) { console.error(err); }
+            const { data } = await api.get('/billing/stats/');
+            setStats(data);
+        } catch (err) {
+            console.error('Failed to load billing stats', err);
+        } finally {
+            if (showLoading) setLoading(false);
+        }
     };
 
     const fetchMetadata = async () => {
@@ -129,7 +154,7 @@ const Billing = () => {
             doctor: doctorToSet,
             payment_status: "PENDING",
             items: []
-        };
+        }
 
         if (visit.doctor_name && visit.doctor_name !== "Not Assigned") {
             const fee = visit.consultation_fee ? parseFloat(visit.consultation_fee) : 500;
@@ -137,12 +162,21 @@ const Billing = () => {
         }
 
         if (visit.pharmacy_items && visit.pharmacy_items.length > 0) {
-            visit.pharmacy_items.forEach(item => {
+            console.log("=== PHARMACY ITEMS FROM BACKEND ===");
+            visit.pharmacy_items.forEach((item, idx) => {
+                console.log(`Item ${idx + 1}: ${item.name}`);
+                console.log(`  - qty: ${item.qty}`);
+                console.log(`  - unit_price: ${item.unit_price}`);
+                console.log(`  - amount: ${item.amount}`);
+                console.log(`  - gst: ${item.gst}%`);
+
+                // Note: pharmacy_items from backend are already at tablet level prices if processed by PharmacySale
                 newFormData.items.push({
                     dept: "PHARMACY", description: item.name, qty: item.qty, unit_price: parseFloat(item.unit_price), amount: parseFloat(item.amount),
                     hsn: item.hsn || "", batch: item.batch || "", gst_percent: item.gst || 0, expiry: "", dosage: item.dosage || "", duration: item.duration || ""
                 });
             });
+            console.log("=== END PHARMACY ITEMS ===");
         } else if (newFormData.items.length === 0) {
             newFormData.items.push({ dept: "PHARMACY", description: "", qty: 1, unit_price: 0, amount: 0, hsn: "", batch: "", gst_percent: 0, expiry: "", dosage: "", duration: "" });
         }
@@ -158,33 +192,122 @@ const Billing = () => {
 
         try {
             const vId = ((typeof formData.visit === 'object') ? formData.visit.id : formData.visit);
+
+            // 1. Fetch Doctor Notes
             let notesData = [];
             try {
                 const res = vId ? await api.get(`medical/doctor-notes/?visit=${vId}`) : await api.get(`medical/doctor-notes/?visit__patient=${patId}`);
                 notesData = res.data.results || (Array.isArray(res.data) ? res.data : []);
-            } catch (e) { }
+            } catch (e) { console.warn("Failed to fetch notes:", e); }
+
+            // 2. Fetch Fresh Visit Details (CRITICAL for getting latest Pharmacy prices)
+            let freshPharmacySales = [];
+            if (vId) {
+                try {
+                    console.log(`Fetching fresh visit data for ID: ${vId}`);
+                    const visitRes = await api.get(`reception/visits/${vId}/`);
+                    if (visitRes.data && visitRes.data.pharmacy_items) {
+                        freshPharmacySales = visitRes.data.pharmacy_items;
+                        console.log("Fresh pharmacy items loaded:", freshPharmacySales);
+                    }
+                } catch (e) {
+                    console.warn("Failed to fetch fresh visit details, utilizing fallback:", e);
+                    // Fallback to existing formData.visit data
+                    if (formData.visit && formData.visit.pharmacy_items) {
+                        freshPharmacySales = formData.visit.pharmacy_items;
+                    }
+                }
+            } else if (formData.visit && formData.visit.pharmacy_items) {
+                freshPharmacySales = formData.visit.pharmacy_items;
+            }
 
             const newItems = [...formData.items];
             if (notesData.length > 0) {
                 const lastNote = notesData[0];
                 if (lastNote.prescription) {
-                    const presItems = Array.isArray(lastNote.prescription) ? lastNote.prescription : Object.entries(lastNote.prescription).map(([name, details]) => ({ name }));
+                    // Prescription format: { "MedicineName": "1-0-1 | 5 Days | Qty: 5" }
+                    const presItems = Array.isArray(lastNote.prescription)
+                        ? lastNote.prescription
+                        : Object.entries(lastNote.prescription).map(([name, details]) => ({ name, details }));
+
                     presItems.forEach(p => {
                         const medName = (p.name || "").trim();
                         if (!medName || newItems.some(i => i.description.toLowerCase() === medName.toLowerCase())) return;
+
+                        // Parse quantity
+                        let qty = 1; // default
+                        if (p.details) {
+                            const qtyMatch = p.details.match(/Qty:\s*(\d+)/i);
+                            if (qtyMatch && qtyMatch[1]) {
+                                qty = parseInt(qtyMatch[1], 10);
+                            }
+                        }
+
+                        // Look up in Pharmacy Sales (Fresh Data)
+                        let pharmacyRecord = null;
+                        if (freshPharmacySales.length > 0) {
+                            pharmacyRecord = freshPharmacySales.find(i =>
+                                i.name.toLowerCase() === medName.toLowerCase()
+                            );
+                        }
+
+                        // Also check existing table items as a fallback
+                        const existingTableItem = formData.items.find(i =>
+                            i.description.toLowerCase() === medName.toLowerCase() && i.dept === "PHARMACY"
+                        );
+
                         const stockItem = pharmacyStock.find(s => s.name.toLowerCase() === medName.toLowerCase());
+                        let unitPrice, amount, gstPercent;
+
+                        if (pharmacyRecord) {
+                            // PRIORITY 1: Official Pharmacy Record (Correct GST Price)
+                            unitPrice = parseFloat(pharmacyRecord.unit_price);
+                            amount = (unitPrice * qty).toFixed(2);
+                            gstPercent = pharmacyRecord.gst || 0;
+                            console.log(`[Import] Found pharmacy record for ${medName}: Price=${unitPrice}, GST=${gstPercent}%`);
+                        } else if (existingTableItem) {
+                            // PRIORITY 2: Existing table item
+                            unitPrice = parseFloat(existingTableItem.unit_price);
+                            amount = (unitPrice * qty).toFixed(2);
+                            gstPercent = existingTableItem.gst_percent || 0;
+                        } else {
+                            // PRIORITY 3: Fallback to Stock MRP
+                            // Fix: Divide MRP by tablets_per_strip for 1 tablet price
+                            // Update: Selling at MRP (no GST deduction)
+                            const tps = stockItem?.tablets_per_strip || 1;
+                            const rawMrp = stockItem ? parseFloat(stockItem.mrp) : 0;
+                            const gst = stockItem?.gst_percent || 0;
+
+                            // Selling Price = MRP (Inclusive)
+                            unitPrice = rawMrp / tps;
+
+                            amount = (unitPrice * qty).toFixed(2);
+                            gstPercent = gst;
+                            console.log(`[Import] Using stock MRP for ${medName}: ${unitPrice} (TPS: ${tps}, GST: ${gst}%)`);
+                        }
+
                         newItems.push({
-                            dept: "PHARMACY", description: medName, qty: 1,
-                            unit_price: stockItem ? parseFloat(stockItem.mrp) : 0,
-                            amount: stockItem ? parseFloat(stockItem.mrp) : 0,
-                            hsn: stockItem?.hsn || "", batch: stockItem?.batch_no || "", gst_percent: 0, expiry: stockItem?.expiry_date || "", dosage: "", duration: ""
+                            dept: "PHARMACY",
+                            description: medName,
+                            qty: qty,
+                            unit_price: unitPrice,
+                            amount: amount,
+                            hsn: stockItem?.hsn || "",
+                            batch: stockItem?.batch_no || "",
+                            gst_percent: gstPercent,
+                            expiry: stockItem?.expiry_date || "",
+                            dosage: "",
+                            duration: ""
                         });
                     });
                 }
             }
             setFormData(prev => ({ ...prev, items: newItems }));
-            showToast('success', "Imported available prescription data.");
-        } catch (err) { showToast('error', "Failed to import."); }
+            showToast('success', "Imported latest prescription data.");
+        } catch (err) {
+            console.error("Import prescription error:", err);
+            showToast('error', "Failed to import.");
+        }
     };
 
     const calculateSubtotal = (items) => items.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0);
@@ -268,26 +391,22 @@ const Billing = () => {
                     </div>
                 </div>
                 <div className="flex gap-3">
-                    <ActionTooltip text="Export CSV">
-                        <button className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 font-bold text-xs uppercase tracking-wider transition-colors shadow-sm">
-                            <Download size={16} /> Reports
-                        </button>
-                    </ActionTooltip>
-                    <ActionTooltip text="Create New Invoice">
-                        <button
-                            onClick={() => {
-                                setFormData({
-                                    patient_name: "", visit: null, doctor: "", payment_status: "PENDING",
-                                    items: [{ dept: "PHARMACY", description: "", qty: 1, unit_price: 0, amount: 0 }]
-                                });
-                                setSelectedPatientId(null);
-                                setShowModal(true);
-                            }}
-                            className="flex items-center gap-2 px-6 py-2.5 bg-slate-900 text-white rounded-xl hover:bg-blue-600 font-bold text-xs uppercase tracking-wider shadow-xl shadow-slate-900/20 transition-all active:scale-[0.98]"
-                        >
-                            <Plus size={16} /> New Invoice
-                        </button>
-                    </ActionTooltip>
+                    <button className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 font-bold text-xs uppercase tracking-wider transition-colors shadow-sm">
+                        <Download size={16} /> Reports
+                    </button>
+                    <button
+                        onClick={() => {
+                            setFormData({
+                                patient_name: "", visit: null, doctor: "", payment_status: "PENDING",
+                                items: [{ dept: "PHARMACY", description: "", qty: 1, unit_price: 0, amount: 0 }]
+                            });
+                            setSelectedPatientId(null);
+                            setShowModal(true);
+                        }}
+                        className="flex items-center gap-2 px-6 py-2.5 bg-slate-900 text-white rounded-xl hover:bg-blue-600 font-bold text-xs uppercase tracking-wider shadow-xl shadow-slate-900/20 transition-all active:scale-[0.98]"
+                    >
+                        <Plus size={16} /> New Invoice
+                    </button>
                 </div>
             </div>
 
@@ -348,9 +467,7 @@ const Billing = () => {
                                     <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center">
                                         <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-1 rounded">PENDING</span>
                                         <div className="flex items-center gap-1 text-slate-400 group-hover:text-blue-500 text-xs font-bold">
-                                            <ActionTooltip text="Generate Bill for this Visit">
-                                                <span>Bill Now</span>
-                                            </ActionTooltip>
+                                            <span>Bill Now</span>
                                             <ChevronRight size={14} />
                                         </div>
                                     </div>
@@ -407,22 +524,16 @@ const Billing = () => {
                                     <td className="px-6 py-4 text-right flex justify-end gap-2">
                                         {/* IMPORTANT: Buttons are always visible now, no group-hover opacity */}
                                         {invoice.payment_status === 'PENDING' && (
-                                            <ActionTooltip text="Collect Payment">
-                                                <button onClick={() => handleMarkAsPaid(invoice)} className="text-emerald-500 hover:text-emerald-700 p-2 rounded-lg hover:bg-emerald-50 border border-emerald-100">
-                                                    <CreditCard size={16} />
-                                                </button>
-                                            </ActionTooltip>
+                                            <button onClick={() => handleMarkAsPaid(invoice)} className="text-emerald-500 hover:text-emerald-700 p-2 rounded-lg hover:bg-emerald-50 border border-emerald-100">
+                                                <CreditCard size={16} />
+                                            </button>
                                         )}
-                                        <ActionTooltip text="Print Invoice">
-                                            <button className="text-slate-400 hover:text-blue-600 p-2 rounded-lg hover:bg-blue-50" onClick={() => handleEditInvoice(invoice)}>
-                                                <Printer size={16} />
-                                            </button>
-                                        </ActionTooltip>
-                                        <ActionTooltip text="View Details">
-                                            <button onClick={() => handleEditInvoice(invoice)} className="text-slate-400 hover:text-indigo-600 p-2 rounded-lg hover:bg-indigo-50">
-                                                <Eye size={16} />
-                                            </button>
-                                        </ActionTooltip>
+                                        <button className="text-slate-400 hover:text-blue-600 p-2 rounded-lg hover:bg-blue-50" onClick={() => handleEditInvoice(invoice)}>
+                                            <Printer size={16} />
+                                        </button>
+                                        <button onClick={() => handleEditInvoice(invoice)} className="text-slate-400 hover:text-indigo-600 p-2 rounded-lg hover:bg-indigo-50">
+                                            <Eye size={16} />
+                                        </button>
                                     </td>
                                 </tr>
                             ))}
@@ -444,16 +555,12 @@ const Billing = () => {
                                     <p className="text-xs text-slate-500 font-bold mt-1">Ref: {formData.id ? `#${formData.id.slice(0, 8)}` : 'Draft'}</p>
                                 </div>
                                 <div className="flex gap-2">
-                                    <ActionTooltip text="Print Invoice">
-                                        <button onClick={handlePrint} className="p-2 bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100 transition-colors">
-                                            <Printer size={20} />
-                                        </button>
-                                    </ActionTooltip>
-                                    <ActionTooltip text="Close Modal" variant="danger">
-                                        <button onClick={() => setShowModal(false)} className="p-2 bg-white rounded-full hover:bg-red-50 hover:text-red-500 transition-colors shadow-sm">
-                                            <X size={20} />
-                                        </button>
-                                    </ActionTooltip>
+                                    <button onClick={handlePrint} className="p-2 bg-blue-50 text-blue-600 rounded-full hover:bg-blue-100 transition-colors">
+                                        <Printer size={20} />
+                                    </button>
+                                    <button onClick={() => setShowModal(false)} className="p-2 bg-white rounded-full hover:bg-red-50 hover:text-red-500 transition-colors shadow-sm">
+                                        <X size={20} />
+                                    </button>
                                 </div>
                             </div>
 
@@ -545,12 +652,10 @@ const Billing = () => {
                                                     </td>
                                                     <td className="py-4 text-right font-bold text-slate-900">₹{item.amount}</td>
                                                     <td className="py-4 text-center no-print">
-                                                        <ActionTooltip text="Remove Item" variant="danger">
-                                                            <button onClick={() => {
-                                                                const newItems = formData.items.filter((_, i) => i !== idx);
-                                                                setFormData({ ...formData, items: newItems });
-                                                            }} className="text-slate-300 hover:text-red-500 transition-colors"><X size={16} /></button>
-                                                        </ActionTooltip>
+                                                        <button onClick={() => {
+                                                            const newItems = formData.items.filter((_, i) => i !== idx);
+                                                            setFormData({ ...formData, items: newItems });
+                                                        }} className="text-slate-300 hover:text-red-500 transition-colors"><X size={16} /></button>
                                                     </td>
                                                 </tr>
                                             ))}
@@ -573,7 +678,7 @@ const Billing = () => {
                                         </div>
                                         <div className="border-t-2 border-slate-900 pt-3 flex justify-between items-end">
                                             <span className="text-xs font-black text-slate-900 uppercase tracking-widest">Total</span>
-                                            <span className="text-3xl font-black text-slate-900 leading-none">₹{calculateSubtotal(formData.items).toFixed(2)}</span>
+                                            <span className="text-3xl font-black text-slate-900 leading-none">₹{Math.ceil(calculateSubtotal(formData.items)).toFixed(2)}</span>
                                         </div>
                                     </div>
                                 </div>
@@ -582,21 +687,15 @@ const Billing = () => {
                             {/* Modal Footer (Actions) */}
                             <div className="p-6 border-t border-slate-100 bg-slate-50/80 flex justify-between items-center no-print">
                                 <div>
-                                    <ActionTooltip text="Import Medications from Doctor's Notes">
-                                        <button onClick={() => handleImportPrescription()} disabled={!selectedPatientId} className={`text-xs font-bold flex items-center gap-2 ${selectedPatientId ? 'text-blue-600 hover:text-blue-800' : 'text-slate-300 cursor-not-allowed'}`}>
-                                            <Import size={16} /> Import from Prescription
-                                        </button>
-                                    </ActionTooltip>
+                                    <button onClick={() => handleImportPrescription()} disabled={!selectedPatientId} className={`text-xs font-bold flex items-center gap-2 ${selectedPatientId ? 'text-blue-600 hover:text-blue-800' : 'text-slate-300 cursor-not-allowed'}`}>
+                                        <Import size={16} /> Import from Prescription
+                                    </button>
                                 </div>
                                 <div className="flex gap-3">
-                                    <ActionTooltip text="Discard Changes">
-                                        <button onClick={() => setShowModal(false)} className="px-6 py-3 rounded-xl font-bold text-slate-600 hover:bg-white border border-transparent hover:border-slate-200 transition-all">Cancel</button>
-                                    </ActionTooltip>
-                                    <ActionTooltip text={formData.id ? "Save Changes" : "Create New Invoice"}>
-                                        <button onClick={handleCreateInvoice} className="px-8 py-3 bg-slate-900 text-white rounded-xl font-bold shadow-xl shadow-slate-900/20 hover:bg-blue-600 transition-all flex items-center gap-2">
-                                            <CheckCircle2 size={18} /> {formData.id ? 'Update Invoice' : 'Generate Invoice'}
-                                        </button>
-                                    </ActionTooltip>
+                                    <button onClick={() => setShowModal(false)} className="px-6 py-3 rounded-xl font-bold text-slate-600 hover:bg-white border border-transparent hover:border-slate-200 transition-all">Cancel</button>
+                                    <button onClick={handleCreateInvoice} className="px-8 py-3 bg-slate-900 text-white rounded-xl font-bold shadow-xl shadow-slate-900/20 hover:bg-blue-600 transition-all flex items-center gap-2">
+                                        <CheckCircle2 size={18} /> {formData.id ? 'Update Invoice' : 'Generate Invoice'}
+                                    </button>
                                 </div>
                             </div>
                         </motion.div>
