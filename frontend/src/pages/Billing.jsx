@@ -156,7 +156,8 @@ const Billing = () => {
             items: []
         }
 
-        if (visit.doctor_name && visit.doctor_name !== "Not Assigned") {
+        const isPharmacyVisit = visit.vitals && visit.vitals.note === 'Auto-created from Pharmacy Manual Sale';
+        if (visit.doctor_name && visit.doctor_name !== "Not Assigned" && !isPharmacyVisit) {
             const fee = visit.consultation_fee ? parseFloat(visit.consultation_fee) : 500;
             newFormData.items.push({ dept: "CONSULTATION", description: "General Consultation Fee", qty: 1, unit_price: fee, amount: fee, hsn: "", batch: "", gst_percent: 0, expiry: "", dosage: "", duration: "" });
         }
@@ -222,69 +223,50 @@ const Billing = () => {
             }
 
             const newItems = [...formData.items];
+            const addedMedNames = new Set(newItems.map(i => i.description.toLowerCase()));
+
+            // A. Process Prescription Items (if any)
             if (notesData.length > 0) {
                 const lastNote = notesData[0];
                 if (lastNote.prescription) {
-                    // Prescription format: { "MedicineName": "1-0-1 | 5 Days | Qty: 5" }
                     const presItems = Array.isArray(lastNote.prescription)
                         ? lastNote.prescription
                         : Object.entries(lastNote.prescription).map(([name, details]) => ({ name, details }));
 
                     presItems.forEach(p => {
                         const medName = (p.name || "").trim();
-                        if (!medName || newItems.some(i => i.description.toLowerCase() === medName.toLowerCase())) return;
+                        if (!medName || addedMedNames.has(medName.toLowerCase())) return;
 
-                        // Parse quantity
-                        let qty = 1; // default
+                        let qty = 1;
                         if (p.details) {
                             const qtyMatch = p.details.match(/Qty:\s*(\d+)/i);
-                            if (qtyMatch && qtyMatch[1]) {
-                                qty = parseInt(qtyMatch[1], 10);
-                            }
+                            if (qtyMatch && qtyMatch[1]) qty = parseInt(qtyMatch[1], 10);
                         }
 
-                        // Look up in Pharmacy Sales (Fresh Data)
-                        let pharmacyRecord = null;
-                        if (freshPharmacySales.length > 0) {
-                            pharmacyRecord = freshPharmacySales.find(i =>
-                                i.name.toLowerCase() === medName.toLowerCase()
-                            );
-                        }
-
-                        // Also check existing table items as a fallback
-                        const existingTableItem = formData.items.find(i =>
-                            i.description.toLowerCase() === medName.toLowerCase() && i.dept === "PHARMACY"
-                        );
-
+                        // Match with Pharmacy Sale
+                        const pharmacyRecord = freshPharmacySales.find(i => i.name.toLowerCase() === medName.toLowerCase());
                         const stockItem = pharmacyStock.find(s => s.name.toLowerCase() === medName.toLowerCase());
-                        let unitPrice, amount, gstPercent;
+
+                        let unitPrice = 0, amount = 0, gstPercent = 0;
+                        let hsn = "", batch = "", expiry = "";
 
                         if (pharmacyRecord) {
-                            // PRIORITY 1: Official Pharmacy Record (Correct GST Price)
-                            unitPrice = parseFloat(pharmacyRecord.unit_price);
-                            amount = (unitPrice * qty).toFixed(2);
+                            unitPrice = parseFloat(pharmacyRecord.unit_price) || 0;
+                            qty = pharmacyRecord.qty || qty; // Use actual billed qty if available
                             gstPercent = pharmacyRecord.gst || 0;
-                            console.log(`[Import] Found pharmacy record for ${medName}: Price=${unitPrice}, GST=${gstPercent}%`);
-                        } else if (existingTableItem) {
-                            // PRIORITY 2: Existing table item
-                            unitPrice = parseFloat(existingTableItem.unit_price);
-                            amount = (unitPrice * qty).toFixed(2);
-                            gstPercent = existingTableItem.gst_percent || 0;
-                        } else {
-                            // PRIORITY 3: Fallback to Stock MRP
-                            // Fix: Divide MRP by tablets_per_strip for 1 tablet price
-                            // Update: Selling at MRP (no GST deduction)
-                            const tps = stockItem?.tablets_per_strip || 1;
-                            const rawMrp = stockItem ? parseFloat(stockItem.mrp) : 0;
-                            const gst = stockItem?.gst_percent || 0;
-
-                            // Selling Price = MRP (Inclusive)
-                            unitPrice = rawMrp / tps;
-
-                            amount = (unitPrice * qty).toFixed(2);
-                            gstPercent = gst;
-                            console.log(`[Import] Using stock MRP for ${medName}: ${unitPrice} (TPS: ${tps}, GST: ${gst}%)`);
+                            hsn = pharmacyRecord.hsn || "";
+                            batch = pharmacyRecord.batch || "";
+                            expiry = pharmacyRecord.expiry || ""; // Assuming serializer sends this?
+                        } else if (stockItem) {
+                            const tps = stockItem.tablets_per_strip || 1;
+                            unitPrice = (parseFloat(stockItem.mrp) || 0) / tps;
+                            gstPercent = stockItem.gst_percent || 0;
+                            hsn = stockItem.hsn || "";
+                            batch = stockItem.batch_no || "";
+                            expiry = stockItem.expiry_date || "";
                         }
+
+                        amount = (unitPrice * qty).toFixed(2);
 
                         newItems.push({
                             dept: "PHARMACY",
@@ -292,18 +274,43 @@ const Billing = () => {
                             qty: qty,
                             unit_price: unitPrice,
                             amount: amount,
-                            hsn: stockItem?.hsn || "",
-                            batch: stockItem?.batch_no || "",
+                            hsn: hsn,
+                            batch: batch,
                             gst_percent: gstPercent,
-                            expiry: stockItem?.expiry_date || "",
-                            dosage: "",
+                            expiry: expiry,
+                            dosage: p.details || "",
                             duration: ""
                         });
+                        addedMedNames.add(medName.toLowerCase());
                     });
                 }
             }
+
+            // B. Process Remaining Pharmacy Items (Manual Sales or Non-Prescribed)
+            if (freshPharmacySales.length > 0) {
+                freshPharmacySales.forEach(item => {
+                    const medName = item.name;
+                    if (addedMedNames.has(medName.toLowerCase())) return; // Already added via prescription match
+
+                    newItems.push({
+                        dept: "PHARMACY",
+                        description: medName,
+                        qty: item.qty,
+                        unit_price: parseFloat(item.unit_price) || 0,
+                        amount: parseFloat(item.amount) || 0,
+                        hsn: item.hsn || "",
+                        batch: item.batch || "",
+                        gst_percent: item.gst || 0,
+                        expiry: "", // Serializer doesn't pass expiry yet?
+                        dosage: item.dosage || "",
+                        duration: item.duration || ""
+                    });
+                    addedMedNames.add(medName.toLowerCase());
+                });
+            }
+
             setFormData(prev => ({ ...prev, items: newItems }));
-            showToast('success', "Imported latest prescription data.");
+            showToast('success', "Imported prescription and pharmacy data.");
         } catch (err) {
             console.error("Import prescription error:", err);
             showToast('error', "Failed to import.");
@@ -378,167 +385,169 @@ const Billing = () => {
     };
 
     return (
-        <div className="p-6 md:p-8 max-w-[1600px] mx-auto min-h-screen bg-[#F8FAFC] font-sans text-slate-900 relative">
+        <div className="p-6 md:p-8 max-w-[1600px] mx-auto min-h-screen bg-[#F8FAFC] font-sans text-slate-900 relative print:p-0 print:m-0 print:min-h-0 print:bg-white print:overflow-visible">
 
-            {/* --- Header --- */}
-            <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mb-8 no-print">
-                <div>
-                    <h1 className="text-3xl font-bold text-slate-900 tracking-tight font-outfit uppercase">Billing & Finance</h1>
-                    <div className="flex items-center gap-2 text-slate-500 font-medium mt-1 text-sm">
-                        <span>Financial Overview</span>
-                        <div className="w-1 h-1 rounded-full bg-slate-300" />
-                        <span>{new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
-                    </div>
-                </div>
-                <div className="flex gap-3">
-                    <button className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 font-bold text-xs uppercase tracking-wider transition-colors shadow-sm">
-                        <Download size={16} /> Reports
-                    </button>
-                    <button
-                        onClick={() => {
-                            setFormData({
-                                patient_name: "", visit: null, doctor: "", payment_status: "PENDING",
-                                items: [{ dept: "PHARMACY", description: "", qty: 1, unit_price: 0, amount: 0 }]
-                            });
-                            setSelectedPatientId(null);
-                            setShowModal(true);
-                        }}
-                        className="flex items-center gap-2 px-6 py-2.5 bg-slate-900 text-white rounded-xl hover:bg-blue-600 font-bold text-xs uppercase tracking-wider shadow-xl shadow-slate-900/20 transition-all active:scale-[0.98]"
-                    >
-                        <Plus size={16} /> New Invoice
-                    </button>
-                </div>
-            </div>
-
-            {/* --- Stats Cards (No Print) --- */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10 no-print">
-                {[
-                    { label: "Today's Revenue", value: `₹${(stats?.revenue_today || 0).toLocaleString()}`, icon: IndianRupee, color: "blue" },
-                    { label: "Pending Collection", value: `₹${(stats?.pending_amount || 0).toLocaleString()}`, icon: Wallet, color: "amber" },
-                    { label: "Invoices Generated", value: stats?.invoices_today || 0, icon: FileText, color: "emerald" },
-                ].map((stat, i) => (
-                    <div key={i} className="bg-white p-6 rounded-[24px] border border-slate-100 shadow-sm flex items-center justify-between group hover:shadow-md transition-all">
-                        <div>
-                            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{stat.label}</p>
-                            <h3 className="text-3xl font-black text-slate-900 font-outfit">{stat.value}</h3>
-                        </div>
-                        <div className={`p-4 rounded-2xl bg-${stat.color}-50 text-${stat.color}-600`}>
-                            <stat.icon size={24} />
+            <div className="no-print space-y-8">
+                {/* --- Header --- */}
+                <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6 mb-8">
+                    <div>
+                        <h1 className="text-3xl font-bold text-slate-900 tracking-tight font-outfit uppercase">Billing & Finance</h1>
+                        <div className="flex items-center gap-2 text-slate-500 font-medium mt-1 text-sm">
+                            <span>Financial Overview</span>
+                            <div className="w-1 h-1 rounded-full bg-slate-300" />
+                            <span>{new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}</span>
                         </div>
                     </div>
-                ))}
-            </div>
-
-            {/* --- Pending Queue (Kanban Style) - No Print --- */}
-            {pendingVisits.length > 0 && (
-                <div className="mb-10 no-print">
-                    <div className="flex items-center gap-2 mb-4 px-1">
-                        <div className="p-1.5 bg-indigo-100 text-indigo-600 rounded-lg"><Sparkles size={16} /></div>
-                        <h3 className="font-bold text-slate-900 text-sm uppercase tracking-wide">Ready for Billing</h3>
+                    <div className="flex gap-3">
+                        <button className="flex items-center gap-2 px-5 py-2.5 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-50 font-bold text-xs uppercase tracking-wider transition-colors shadow-sm">
+                            <Download size={16} /> Reports
+                        </button>
+                        <button
+                            onClick={() => {
+                                setFormData({
+                                    patient_name: "", visit: null, doctor: "", payment_status: "PENDING",
+                                    items: [{ dept: "PHARMACY", description: "", qty: 1, unit_price: 0, amount: 0 }]
+                                });
+                                setSelectedPatientId(null);
+                                setShowModal(true);
+                            }}
+                            className="flex items-center gap-2 px-6 py-2.5 bg-slate-900 text-white rounded-xl hover:bg-blue-600 font-bold text-xs uppercase tracking-wider shadow-xl shadow-slate-900/20 transition-all active:scale-[0.98]"
+                        >
+                            <Plus size={16} /> New Invoice
+                        </button>
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                        {pendingVisits.map(visit => (
-                            <div key={visit.id} onClick={() => handleBillNow(visit)} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:border-blue-400 hover:shadow-md cursor-pointer transition-all group relative overflow-hidden">
-                                <div className="absolute top-0 right-0 w-16 h-16 bg-blue-50 rounded-bl-[3rem] -mr-8 -mt-8 z-0"></div>
-                                <div className="relative z-10">
-                                    <div className="flex justify-between items-start mb-2">
-                                        <div className="flex items-center gap-3">
-                                            <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center font-bold text-sm">
-                                                {visit.patient_name?.[0] || "?"}
+                </div>
+
+                {/* --- Stats Cards --- */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+                    {[
+                        { label: "Today's Revenue", value: `₹${(stats?.revenue_today || 0).toLocaleString()}`, icon: IndianRupee, color: "blue" },
+                        { label: "Pending Collection", value: `₹${(stats?.pending_amount || 0).toLocaleString()}`, icon: Wallet, color: "amber" },
+                        { label: "Invoices Generated", value: stats?.invoices_today || 0, icon: FileText, color: "emerald" },
+                    ].map((stat, i) => (
+                        <div key={i} className="bg-white p-6 rounded-[24px] border border-slate-100 shadow-sm flex items-center justify-between group hover:shadow-md transition-all">
+                            <div>
+                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">{stat.label}</p>
+                                <h3 className="text-3xl font-black text-slate-900 font-outfit">{stat.value}</h3>
+                            </div>
+                            <div className={`p-4 rounded-2xl bg-${stat.color}-50 text-${stat.color}-600`}>
+                                <stat.icon size={24} />
+                            </div>
+                        </div>
+                    ))}
+                </div>
+
+                {/* --- Pending Queue (Kanban Style) --- */}
+                {pendingVisits.length > 0 && (
+                    <div className="mb-10">
+                        <div className="flex items-center gap-2 mb-4 px-1">
+                            <div className="p-1.5 bg-indigo-100 text-indigo-600 rounded-lg"><Sparkles size={16} /></div>
+                            <h3 className="font-bold text-slate-900 text-sm uppercase tracking-wide">Ready for Billing</h3>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                            {pendingVisits.map(visit => (
+                                <div key={visit.id} onClick={() => handleBillNow(visit)} className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:border-blue-400 hover:shadow-md cursor-pointer transition-all group relative overflow-hidden">
+                                    <div className="absolute top-0 right-0 w-16 h-16 bg-blue-50 rounded-bl-[3rem] -mr-8 -mt-8 z-0"></div>
+                                    <div className="relative z-10">
+                                        <div className="flex justify-between items-start mb-2">
+                                            <div className="flex items-center gap-3">
+                                                <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center font-bold text-sm">
+                                                    {visit.patient_name?.[0] || "?"}
+                                                </div>
+                                                <div>
+                                                    <h4 className="font-bold text-slate-900 text-sm line-clamp-1">{visit.patient_name}</h4>
+                                                    <p className="text-[10px] font-bold text-slate-400 uppercase">ID: {(visit.id || "").toString().slice(0, 6)}</p>
+                                                </div>
                                             </div>
-                                            <div>
-                                                <h4 className="font-bold text-slate-900 text-sm line-clamp-1">{visit.patient_name}</h4>
-                                                <p className="text-[10px] font-bold text-slate-400 uppercase">ID: {(visit.id || "").toString().slice(0, 6)}</p>
+                                        </div>
+                                        <div className="space-y-1 mt-3">
+                                            <div className="flex justify-between text-xs">
+                                                <span className="text-slate-500 font-medium">Consultation</span>
+                                                <span className="font-bold text-slate-700">₹{visit.consultation_fee || 500}</span>
+                                            </div>
+                                            <div className="flex justify-between text-xs">
+                                                <span className="text-slate-500 font-medium">Pharmacy</span>
+                                                <span className="font-bold text-slate-700">
+                                                    ₹{(visit.pharmacy_items || []).reduce((sum, i) => sum + parseFloat(i.amount), 0).toFixed(0)}
+                                                </span>
                                             </div>
                                         </div>
-                                    </div>
-                                    <div className="space-y-1 mt-3">
-                                        <div className="flex justify-between text-xs">
-                                            <span className="text-slate-500 font-medium">Consultation</span>
-                                            <span className="font-bold text-slate-700">₹{visit.consultation_fee || 500}</span>
-                                        </div>
-                                        <div className="flex justify-between text-xs">
-                                            <span className="text-slate-500 font-medium">Pharmacy</span>
-                                            <span className="font-bold text-slate-700">
-                                                ₹{(visit.pharmacy_items || []).reduce((sum, i) => sum + parseFloat(i.amount), 0).toFixed(0)}
-                                            </span>
-                                        </div>
-                                    </div>
-                                    <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center">
-                                        <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-1 rounded">PENDING</span>
-                                        <div className="flex items-center gap-1 text-slate-400 group-hover:text-blue-500 text-xs font-bold">
-                                            <span>Bill Now</span>
-                                            <ChevronRight size={14} />
+                                        <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center">
+                                            <span className="text-[10px] font-black text-blue-600 bg-blue-50 px-2 py-1 rounded">PENDING</span>
+                                            <div className="flex items-center gap-1 text-slate-400 group-hover:text-blue-500 text-xs font-bold">
+                                                <span>Bill Now</span>
+                                                <ChevronRight size={14} />
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-                        ))}
-                    </div>
-                </div>
-            )}
-
-            {/* --- Invoice List (No Print) --- */}
-            <div className="bg-white rounded-[24px] border border-slate-200 shadow-sm overflow-hidden no-print">
-                <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
-                    <h3 className="font-bold text-slate-900 text-sm uppercase tracking-wide flex items-center gap-2">
-                        <FileText size={16} className="text-slate-400" /> Recent Invoices
-                    </h3>
-                    <div className="relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                        <input
-                            type="text"
-                            placeholder="Search invoices..."
-                            className="pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none w-64 transition-all"
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                        />
-                    </div>
-                </div>
-
-                <div className="overflow-x-auto">
-                    <table className="w-full text-left text-sm">
-                        <thead className="bg-slate-50 text-slate-500 font-bold text-[10px] uppercase tracking-wider">
-                            <tr>
-                                <th className="px-6 py-4">Invoice ID</th>
-                                <th className="px-6 py-4">Patient</th>
-                                <th className="px-6 py-4">Amount</th>
-                                <th className="px-6 py-4">Status</th>
-                                <th className="px-6 py-4">Date</th>
-                                <th className="px-6 py-4 text-right">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                            {invoices.filter(inv => (inv.patient_name || "").toLowerCase().includes(searchTerm.toLowerCase()) || (inv.id || "").toString().includes(searchTerm)).map((invoice) => (
-                                <tr key={invoice.id} className="hover:bg-slate-50/80 transition-colors group">
-                                    <td className="px-6 py-4 font-mono text-xs font-bold text-slate-500">#{invoice.id?.toString().slice(0, 8).toUpperCase()}</td>
-                                    <td className="px-6 py-4 font-bold text-slate-900">{invoice.patient_name || "Guest"}</td>
-                                    <td className="px-6 py-4 font-bold text-slate-700">₹{invoice.total_amount}</td>
-                                    <td className="px-6 py-4">
-                                        <span className={`px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wide border ${invoice.payment_status === 'PAID' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-amber-50 text-amber-700 border-amber-100"
-                                            }`}>
-                                            {invoice.payment_status}
-                                        </span>
-                                    </td>
-                                    <td className="px-6 py-4 text-xs font-medium text-slate-500">{new Date(invoice.created_at).toLocaleDateString()}</td>
-                                    <td className="px-6 py-4 text-right flex justify-end gap-2">
-                                        {/* IMPORTANT: Buttons are always visible now, no group-hover opacity */}
-                                        {invoice.payment_status === 'PENDING' && (
-                                            <button onClick={() => handleMarkAsPaid(invoice)} className="text-emerald-500 hover:text-emerald-700 p-2 rounded-lg hover:bg-emerald-50 border border-emerald-100">
-                                                <CreditCard size={16} />
-                                            </button>
-                                        )}
-                                        <button className="text-slate-400 hover:text-blue-600 p-2 rounded-lg hover:bg-blue-50" onClick={() => handleEditInvoice(invoice)}>
-                                            <Printer size={16} />
-                                        </button>
-                                        <button onClick={() => handleEditInvoice(invoice)} className="text-slate-400 hover:text-indigo-600 p-2 rounded-lg hover:bg-indigo-50">
-                                            <Eye size={16} />
-                                        </button>
-                                    </td>
-                                </tr>
                             ))}
-                        </tbody>
-                    </table>
+                        </div>
+                    </div>
+                )}
+
+                {/* --- Invoice List --- */}
+                <div className="bg-white rounded-[24px] border border-slate-200 shadow-sm overflow-hidden">
+                    <div className="p-5 border-b border-slate-100 flex justify-between items-center bg-slate-50/50">
+                        <h3 className="font-bold text-slate-900 text-sm uppercase tracking-wide flex items-center gap-2">
+                            <FileText size={16} className="text-slate-400" /> Recent Invoices
+                        </h3>
+                        <div className="relative">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+                            <input
+                                type="text"
+                                placeholder="Search invoices..."
+                                className="pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-lg text-sm font-medium focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none w-64 transition-all"
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-left text-sm">
+                            <thead className="bg-slate-50 text-slate-500 font-bold text-[10px] uppercase tracking-wider">
+                                <tr>
+                                    <th className="px-6 py-4">Invoice ID</th>
+                                    <th className="px-6 py-4">Patient</th>
+                                    <th className="px-6 py-4">Amount</th>
+                                    <th className="px-6 py-4">Status</th>
+                                    <th className="px-6 py-4">Date</th>
+                                    <th className="px-6 py-4 text-right">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                                {invoices.filter(inv => (inv.patient_name || "").toLowerCase().includes(searchTerm.toLowerCase()) || (inv.id || "").toString().includes(searchTerm)).map((invoice) => (
+                                    <tr key={invoice.id} className="hover:bg-slate-50/80 transition-colors group">
+                                        <td className="px-6 py-4 font-mono text-xs font-bold text-slate-500">#{invoice.id?.toString().slice(0, 8).toUpperCase()}</td>
+                                        <td className="px-6 py-4 font-bold text-slate-900">{invoice.patient_name || "Guest"}</td>
+                                        <td className="px-6 py-4 font-bold text-slate-700">₹{invoice.total_amount}</td>
+                                        <td className="px-6 py-4">
+                                            <span className={`px-2.5 py-1 rounded-md text-[10px] font-black uppercase tracking-wide border ${invoice.payment_status === 'PAID' ? "bg-emerald-50 text-emerald-700 border-emerald-100" : "bg-amber-50 text-amber-700 border-amber-100"
+                                                }`}>
+                                                {invoice.payment_status}
+                                            </span>
+                                        </td>
+                                        <td className="px-6 py-4 text-xs font-medium text-slate-500">{new Date(invoice.created_at).toLocaleDateString()}</td>
+                                        <td className="px-6 py-4 text-right flex justify-end gap-2">
+                                            {/* IMPORTANT: Buttons are always visible now, no group-hover opacity */}
+                                            {invoice.payment_status === 'PENDING' && (
+                                                <button onClick={() => handleMarkAsPaid(invoice)} className="text-emerald-500 hover:text-emerald-700 p-2 rounded-lg hover:bg-emerald-50 border border-emerald-100">
+                                                    <CreditCard size={16} />
+                                                </button>
+                                            )}
+                                            <button className="text-slate-400 hover:text-blue-600 p-2 rounded-lg hover:bg-blue-50" onClick={() => handleEditInvoice(invoice)}>
+                                                <Printer size={16} />
+                                            </button>
+                                            <button onClick={() => handleEditInvoice(invoice)} className="text-slate-400 hover:text-indigo-600 p-2 rounded-lg hover:bg-indigo-50">
+                                                <Eye size={16} />
+                                            </button>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
 
@@ -605,6 +614,7 @@ const Billing = () => {
                                                 <th className="py-3 text-[10px] font-black text-slate-900 uppercase tracking-widest w-16">#</th>
                                                 <th className="py-3 text-[10px] font-black text-slate-900 uppercase tracking-widest">Description</th>
                                                 <th className="py-3 text-[10px] font-black text-slate-900 uppercase tracking-widest w-24 text-center">Qty</th>
+                                                <th className="py-3 text-[10px] font-black text-slate-900 uppercase tracking-widest w-24 text-center">GST %</th>
                                                 <th className="py-3 text-[10px] font-black text-slate-900 uppercase tracking-widest w-32 text-right">Price</th>
                                                 <th className="py-3 text-[10px] font-black text-slate-900 uppercase tracking-widest w-32 text-right">Amount</th>
                                                 <th className="py-3 w-10 no-print"></th>
@@ -634,6 +644,19 @@ const Billing = () => {
                                                                 const qty = parseInt(e.target.value) || 0;
                                                                 const newItems = [...formData.items];
                                                                 newItems[idx] = { ...item, qty, amount: (qty * item.unit_price).toFixed(2) };
+                                                                setFormData({ ...formData, items: newItems });
+                                                            }}
+                                                        />
+                                                    </td>
+                                                    <td className="py-4 text-center">
+                                                        <input
+                                                            type="number" className="w-full bg-transparent text-center font-medium outline-none text-slate-500"
+                                                            value={item.gst_percent}
+                                                            placeholder="0"
+                                                            onChange={(e) => {
+                                                                const gst = parseFloat(e.target.value) || 0;
+                                                                const newItems = [...formData.items];
+                                                                newItems[idx] = { ...item, gst_percent: gst };
                                                                 setFormData({ ...formData, items: newItems });
                                                             }}
                                                         />

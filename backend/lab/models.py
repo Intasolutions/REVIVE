@@ -90,3 +90,12 @@ class LabTestParameter(BaseModel):
 
     def __str__(self):
         return f"{self.name} ({self.test.name})"
+
+
+class LabTestRequiredItem(BaseModel):
+    test = models.ForeignKey(LabTest, on_delete=models.CASCADE, related_name='required_items')
+    inventory_item = models.ForeignKey(LabInventory, on_delete=models.CASCADE)
+    qty_per_test = models.PositiveIntegerField(default=1)
+
+    def __str__(self):
+        return f"{self.test.name} needs {self.qty_per_test} x {self.inventory_item.item_name}"

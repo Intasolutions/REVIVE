@@ -43,6 +43,7 @@ class PharmacyStock(BaseModel):
 
     mrp = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(0)])
     selling_price = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(0)])
+    purchase_rate = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(0)], default=0)
 
     qty_available = models.PositiveIntegerField(default=0)
     reorder_level = models.PositiveIntegerField(default=10)
@@ -52,6 +53,8 @@ class PharmacyStock(BaseModel):
     hsn = models.CharField(max_length=20, blank=True)
     gst_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)
     manufacturer = models.CharField(max_length=255, blank=True)
+
+    tablets_per_strip = models.PositiveIntegerField(default=1)
 
     # Spec: soft delete
     is_deleted = models.BooleanField(default=False)
@@ -85,6 +88,7 @@ class PurchaseItem(BaseModel):
 
     manufacturer = models.CharField(max_length=255, blank=True)
     hsn = models.CharField(max_length=20, blank=True)
+    tablets_per_strip = models.PositiveIntegerField(default=1)
 
     def __str__(self):
         return f"{self.product_name} - {self.batch_no}"
@@ -129,6 +133,7 @@ class PharmacySaleItem(BaseModel):
     qty = models.PositiveIntegerField()
     unit_price = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(0)])
     amount = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(0)])
+    gst_percent = models.DecimalField(max_digits=5, decimal_places=2, default=0)  # GST rate applied at sale time
 
     def __str__(self):
         return f"{self.med_stock.name} x {self.qty}"

@@ -17,6 +17,7 @@ const TriageModal = ({ visit, onClose, onSave, doctors = [] }) => {
         transfer_path: 'REFER_DOCTOR', // Default action
         doctor: ''
     });
+    const [error, setError] = useState(null);
 
     useEffect(() => {
         if (visit) {
@@ -30,8 +31,16 @@ const TriageModal = ({ visit, onClose, onSave, doctors = [] }) => {
     }, [visit]);
 
     const handleSubmit = async () => {
-        await onSave(visit.id || visit.v_id, formData);
-        onClose();
+        // Validate Vitals
+        const { bp, temp, pulse, spo2 } = formData.vitals;
+        if (!bp || !temp || !pulse || !spo2) {
+            setError('MISSING VITALS: Please ensure BP, Temp, Pulse, and SpO2 are recorded.');
+            return;
+        }
+
+        setError(null);
+        const success = await onSave(visit.id || visit.v_id, formData);
+        if (success) onClose();
     };
 
     return (
@@ -150,7 +159,7 @@ const TriageModal = ({ visit, onClose, onSave, doctors = [] }) => {
                                         </select>
                                         <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
                                             {/* Fixed ChevronRight error by importing it or using ChevronDown */}
-                                            <ChevronDown size={16} /> 
+                                            <ChevronDown size={16} />
                                         </div>
                                     </div>
                                 </motion.div>
@@ -159,11 +168,23 @@ const TriageModal = ({ visit, onClose, onSave, doctors = [] }) => {
                     </div>
                 </div>
 
-                <div className="p-6 border-t border-slate-100 bg-slate-50/80 flex justify-end gap-3 backdrop-blur-sm">
-                    <button onClick={onClose} className="px-6 py-3 rounded-xl text-slate-500 font-bold hover:bg-white hover:text-slate-700 hover:shadow-sm transition-all text-xs uppercase tracking-widest">Cancel</button>
-                    <button onClick={handleSubmit} className="px-8 py-3 rounded-xl bg-slate-900 text-white font-bold hover:bg-blue-600 shadow-xl shadow-slate-900/20 transition-all active:scale-[0.98] text-xs uppercase tracking-widest flex items-center gap-2">
-                        Confirm & Update <ArrowRight size={14} />
-                    </button>
+                <div className="p-6 border-t border-slate-100 bg-slate-50/80 backdrop-blur-sm">
+                    {error && (
+                        <motion.div
+                            initial={{ opacity: 0, y: 10 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            className="mb-4 p-4 bg-rose-50 border border-rose-100 rounded-xl flex items-center gap-3 text-rose-600"
+                        >
+                            <AlertTriangle size={18} />
+                            <span className="text-sm font-bold">{error}</span>
+                        </motion.div>
+                    )}
+                    <div className="flex justify-end gap-3">
+                        <button onClick={onClose} className="px-6 py-3 rounded-xl text-slate-500 font-bold hover:bg-white hover:text-slate-700 hover:shadow-sm transition-all text-xs uppercase tracking-widest">Cancel</button>
+                        <button onClick={handleSubmit} className="px-8 py-3 rounded-xl bg-slate-900 text-white font-bold hover:bg-blue-600 shadow-xl shadow-slate-900/20 transition-all active:scale-[0.98] text-xs uppercase tracking-widest flex items-center gap-2">
+                            Confirm & Update <ArrowRight size={14} />
+                        </button>
+                    </div>
                 </div>
             </motion.div>
         </div>
@@ -233,7 +254,7 @@ const CasualtyPage = () => {
             const activeCases = allCasualtyVisits.filter(v => v.status === 'IN_PROGRESS' || v.status === 'OPEN').length;
             const triagedToday = allCasualtyVisits.filter(v => v.created_at?.startsWith(today)).length;
             const currentQueue = allCasualtyVisits.filter(v => v.status === 'OPEN' || v.status === 'IN_PROGRESS');
-            
+
             let avgWait = 0;
             if (currentQueue.length > 0) {
                 const totalWaitTime = currentQueue.reduce((sum, v) => sum + (new Date() - new Date(v.created_at)), 0);
@@ -275,9 +296,11 @@ const CasualtyPage = () => {
             showToast('success', 'Patient updated successfully');
             fetchQueue();
             fetchStats();
+            return true;
         } catch (err) {
             console.error(err);
             showToast('error', 'Failed to update patient');
+            return false;
         }
     };
 

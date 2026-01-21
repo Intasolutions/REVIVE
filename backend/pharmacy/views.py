@@ -123,10 +123,28 @@ class PharmacyBulkUploadView(APIView):
                     mrp_val = get_val(['MRP'], 0)
                     try: mrp = float(mrp_val)
                     except: mrp = 0
+
+                    if qty and qty > 0:
+                        # Logic removed: CSV contains UNIT rates, not total amounts.
+                        # rate = round(rate / qty, 2)
+                        # mrp = round(mrp / qty, 2)
+                        # if ptr > 0: ptr = round(ptr / qty, 2)
+                        pass
+
                     
                     hsn = get_val(['HSN', 'HSN Code'], '')
                     manufacturer = get_val(['Manufacturer Name', 'Manufacturer.Name', 'Mfr Name', 'Mfr'], '')
                     barcode = get_val(['Product Code', 'Barcode', 'Code'], '')
+                    
+                    # New: Tablets per strip
+                    strip_size_val = get_val(['Packing', 'ItemPerPack', 'Strip Size', 'Tablets per Strip', 'TPS', 'Unit'], 1)
+                    try:
+                        # Extract number from packing like "10S" or "10 Tablets"
+                        import re
+                        match = re.search(r'(\d+)', str(strip_size_val))
+                        tps = int(match.group(1)) if match else 1
+                    except:
+                        tps = 1
 
                     # Parse Expiry (mm/yyyy)
                     try:
@@ -148,21 +166,27 @@ class PharmacyBulkUploadView(APIView):
                         mrp=mrp,
                         ptr=ptr,
                         manufacturer=manufacturer,
-                        hsn=hsn
+                        hsn=hsn,
+                        tablets_per_strip=tps
                     )
 
                     # Update/Create Stock
-                    total_qty_in = qty + free
+                    # User clarified that both 'Qty' and 'Free' are strips
+                    total_qty_in = (qty + free) * tps
                     
                     # Try to parse GST if available in common headers
                     gst_val = 0
-                    for key in ['GST', 'GST%', 'Tax', 'Tax %', 'IGST']:
+                    for key in ['GST', 'GST%', 'Tax', 'Tax %', 'IGST', 'TaxPerc']:
                         if key in data and data[key]:
                             try:
                                 val_str = str(data[key]).replace('%', '').strip()
                                 gst_val = float(val_str)
                                 break
                             except: pass
+
+                    # Calculate Selling Price
+                    # User confirmed "mrp price is sale price" (Selling at MRP)
+                    calculated_selling_price = mrp
 
                     stock, created = PharmacyStock.objects.get_or_create(
                         name=p_name,
@@ -172,8 +196,10 @@ class PharmacyBulkUploadView(APIView):
                         defaults={
                             'barcode': barcode,
                             'mrp': mrp,
-                            'selling_price': ptr if ptr > 0 else mrp,
+                            'selling_price': calculated_selling_price,
+                            'purchase_rate': rate,
                             'qty_available': total_qty_in,
+                            'tablets_per_strip': tps,
                             'manufacturer': manufacturer,
                             'hsn': hsn,
                             'gst_percent': gst_val
@@ -182,9 +208,13 @@ class PharmacyBulkUploadView(APIView):
                     if not created:
                         stock.qty_available += total_qty_in
                         # Update metadata fields if they are better/newer
+                        stock.mrp = mrp
+                        stock.gst_percent = gst_val
+                        stock.selling_price = calculated_selling_price
+                        stock.purchase_rate = rate
+                        stock.tablets_per_strip = tps
                         if manufacturer: stock.manufacturer = manufacturer
                         if hsn: stock.hsn = hsn
-                        if gst_val > 0: stock.gst_percent = gst_val
                         stock.save()
 
                     items_created += 1

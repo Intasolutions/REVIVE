@@ -14,7 +14,8 @@ class IsLabOrAdmin(permissions.BasePermission):
     def has_permission(self, request, view):
         if not (request.user and request.user.is_authenticated):
             return False
-        return request.user.is_superuser or getattr(request.user, "role", None) in ["LAB", "ADMIN"]
+        # Allow LAB, ADMIN, and DOCTOR (doctors need to search lab tests for requisitions)
+        return request.user.is_superuser or getattr(request.user, "role", None) in ["LAB", "ADMIN", "DOCTOR"]
 
 
 class LabTestViewSet(viewsets.ModelViewSet):
@@ -106,8 +107,55 @@ class LabChargeViewSet(viewsets.ModelViewSet):
     def perform_update(self, serializer):
         instance = serializer.save()
         
-        # Trigger Billing if status matches COMPLETED
+        # Trigger Billing & Inventory if status matches COMPLETED
         if instance.status == 'COMPLETED':
+            # --- INVENTORY DEDUCTION LOGIC ---
+            try:
+                # Check if specific consumption data was sent (Wastage Handling)
+                consumed_items = self.request.data.get('consumed_items')
+                
+                if consumed_items and isinstance(consumed_items, list):
+                    # Manual/Actual Consumption Provided
+                    for item in consumed_items:
+                        inv_id = item.get('inventory_item')
+                        qty_used = int(item.get('qty', 0))
+                        
+                        if inv_id and qty_used > 0:
+                            inv_item = LabInventory.objects.get(id=inv_id)
+                            inv_item.qty = max(0, inv_item.qty - qty_used)
+                            inv_item.save()
+                            
+                            LabInventoryLog.objects.create(
+                                item=inv_item,
+                                transaction_type='STOCK_OUT',
+                                qty=qty_used,
+                                performed_by=instance.technician_name or 'System (Auto)',
+                                notes=f'Test Consumption: {instance.test_name} (Patient: {instance.visit.patient.full_name})'
+                            )
+                else:
+                    # Fallback to Default Recipe
+                    lab_test = LabTest.objects.filter(name=instance.test_name).first()
+                    if lab_test:
+                        for requirement in lab_test.required_items.all():
+                            inventory_item = requirement.inventory_item
+                            qty_needed = requirement.qty_per_test
+                            
+                            # Deduct Stock
+                            inventory_item.qty = max(0, inventory_item.qty - qty_needed)
+                            inventory_item.save()
+                            
+                            # Log Transaction
+                            LabInventoryLog.objects.create(
+                                item=inventory_item,
+                                transaction_type='STOCK_OUT',
+                                qty=qty_needed,
+                                performed_by=instance.technician_name or 'System (Auto)',
+                                notes=f'Auto-deduction for Test: {instance.test_name} (Patient: {instance.visit.patient.full_name})'
+                            )
+            except Exception as e:
+                print(f"Inventory Auto-Stockout Error: {e}")
+
+            # --- BILLING LOGIC ---
             # 1. Get/Create Invoice for this Visit
             # We look for a pending invoice for this visit, or create one.
             invoice, created = Invoice.objects.get_or_create(

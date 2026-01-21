@@ -90,7 +90,7 @@ const Pharmacy = () => {
 
     // POS
     const [cart, setCart] = useState([]);
-    const [gstRate, setGstRate] = useState(0);
+    const [gstRate, setGstRate] = useState(0); // Default to 0% GST
     const [patientSearch, setPatientSearch] = useState('');
     const [patients, setPatients] = useState([]);
     const [selectedPatient, setSelectedPatient] = useState(null);
@@ -156,11 +156,22 @@ const Pharmacy = () => {
 
     useEffect(() => {
         fetchStock(true); fetchSuppliers(); fetchPendingVisits(false); fetchRecentImports();
-        const interval = setInterval(() => { fetchStock(false); fetchPendingVisits(false); }, 5000);
+        // Global socket listener for prescriptions
         const onDoctorUpdate = (data) => { if (data.has_prescription) { fetchPendingVisits(false); showToast('info', 'New prescription received'); } };
         socket.on('doctor_notes_update', onDoctorUpdate);
-        return () => { clearInterval(interval); socket.off('doctor_notes_update', onDoctorUpdate); };
+        return () => { socket.off('doctor_notes_update', onDoctorUpdate); };
     }, []);
+
+    // Auto-Refresh: Only on POS tab to avoid resetting filters in Inventory
+    useEffect(() => {
+        let interval;
+        if (activeTab === 'pos') {
+            interval = setInterval(() => {
+                fetchPendingVisits(false);
+            }, 4000); // 4 second reload as requested
+        }
+        return () => { if (interval) clearInterval(interval); };
+    }, [activeTab, fetchPendingVisits]);
 
     useEffect(() => {
         if (activeTab === 'inventory') fetchStock();
@@ -412,7 +423,7 @@ const Pharmacy = () => {
                                 </div>
                             </div>
                             <div className="flex-1 flex flex-col overflow-hidden p-6">
-                                <div className="relative mb-6 shrink-0"><Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} /><input className="w-full pl-12 pr-44 py-4 bg-white border-2 border-blue-100 rounded-2xl text-lg font-medium text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none shadow-sm" placeholder="Scan barcode or type medicine name..." value={medSearch} onChange={e => searchMeds(e.target.value)} autoFocus /><div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-2"><span className="text-[10px] font-black text-slate-400 uppercase tracking-widest hidden xl:block">GST Reduction</span><select className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:border-blue-500" value={gstRate} onChange={(e) => setGstRate(Number(e.target.value))}>{[0, 5, 12, 18, 28].map(r => <option key={r} value={r}>{r}% GST</option>)}</select></div></div>
+                                <div className="relative mb-6 shrink-0"><Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} /><input className="w-full pl-12 pr-44 py-4 bg-white border-2 border-blue-100 rounded-2xl text-lg font-medium text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all outline-none shadow-sm" placeholder="Scan barcode or type medicine name..." value={medSearch} onChange={e => searchMeds(e.target.value)} autoFocus /><div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-2"><span className="text-[10px] font-black text-slate-400 uppercase tracking-widest hidden xl:block">GST Reduction</span><select className="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-bold text-slate-700 outline-none focus:border-blue-500" value={gstRate} onChange={(e) => setGstRate(Number(e.target.value))}>{[0, 5, 12, 18, 28].map(r => <option key={r} value={r}>{r === 0 ? '0% (None)' : `${r}% GST`}</option>)}</select></div></div>
                                 <div className="flex-1 overflow-y-auto">
                                     {medResults.length > 0 ? (
                                         <div className="grid grid-cols-2 lg:grid-cols-3 gap-4 pb-20">
@@ -600,7 +611,7 @@ const Pharmacy = () => {
                                 <table className="w-full text-left border-collapse">
                                     <thead className="bg-white sticky top-0 shadow-sm"><tr>{['Product', 'Batch', 'Exp', 'Qty', 'MRP', 'PTR', 'Amount'].map(h => <th key={h} className="px-6 py-4 text-[10px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-50">{h}</th>)}</tr></thead>
                                     <tbody className="divide-y divide-slate-50">{selectedImport.items_detail?.map((item, idx) => (
-                                        <tr key={idx} className="hover:bg-slate-50 transition-colors"><td className="px-6 py-3 font-bold text-sm text-slate-900">{item.product_name}</td><td className="px-6 py-3 font-mono text-xs text-slate-600">{item.batch_no}</td><td className="px-6 py-3 font-mono text-xs text-slate-600">{item.expiry_date}</td><td className="px-6 py-3 font-bold text-emerald-600">{item.qty}</td><td className="px-6 py-3 text-sm text-slate-600">₹{item.mrp}</td><td className="px-6 py-3 text-sm text-slate-600">₹{item.ptr}</td><td className="px-6 py-3 font-black text-slate-900">₹{((item.ptr || 0) * item.qty).toFixed(2)}</td></tr>
+                                        <tr key={idx} className="hover:bg-slate-50 transition-colors"><td className="px-6 py-3 font-bold text-sm text-slate-900">{item.product_name}</td><td className="px-6 py-3 font-mono text-xs text-slate-600">{item.batch_no}</td><td className="px-6 py-3 font-mono text-xs text-slate-600">{item.expiry_date}</td><td className="px-6 py-3 font-bold text-emerald-600">{item.qty} {item.free_qty > 0 && <span className="text-xs text-emerald-400">+ {item.free_qty} Free</span>}</td><td className="px-6 py-3 text-sm text-slate-600">₹{item.mrp}</td><td className="px-6 py-3 text-sm text-slate-600">₹{item.ptr}</td><td className="px-6 py-3 font-black text-slate-900">₹{((item.ptr || 0) * item.qty).toFixed(2)}</td></tr>
                                     ))}</tbody>
                                 </table>
                             </div>
